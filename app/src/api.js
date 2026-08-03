@@ -138,7 +138,13 @@ export async function today(env) {
 
 export async function trip(env) {
   const meta = await tripMeta(env);
-  const today_ = localDate(nowIso(), "-0500");
+  // Was hardcoded to Central. Once they reach Mountain or Pacific that is an
+  // hour or three ahead of where they actually are, and the day list grows a
+  // phantom tomorrow with zero miles every evening.
+  const offset = (await env.roadtrip
+    .prepare(`SELECT time_zone FROM trips WHERE time_zone IS NOT NULL ORDER BY start_time DESC LIMIT 1`)
+    .first())?.time_zone || "-0500";
+  const today_ = localDate(nowIso(), offset);
 
   const days = await env.roadtrip.prepare(
     `SELECT date, day_number, title, miles, stops, photos, journal_entries, places
@@ -262,7 +268,7 @@ export async function map(env) {
         ORDER BY t.start_time`).all(),
     env.roadtrip.prepare(
       `SELECT id, kind, place, lat, lon, occurred_at FROM stop
-        WHERE lat IS NOT NULL ORDER BY occurred_at`).all(),
+        WHERE lat IS NOT NULL AND lon IS NOT NULL ORDER BY occurred_at`).all(),
     env.roadtrip.prepare(`SELECT lat, lon, ts FROM track_points ORDER BY ts DESC LIMIT 1`).first(),
     env.roadtrip.prepare(`SELECT * FROM v_trip_mileage`).first(),
   ]);
@@ -333,12 +339,16 @@ export async function createJournal(env, person, body) {
   if (!body.body || !body.body.trim()) return json({ error: "empty" }, 400);
   const at = body.written_at || nowIso();
   const offset = body.tz_offset || "-0500";
+  // An explicit date wins: writing on Tuesday about Sunday should file under
+  // Sunday. Without this the entry silently landed on today and vanished from
+  // the screen the author was looking at.
+  const date = body.date || localDate(at, offset);
   const id = body.client_id || crypto.randomUUID();
   await env.roadtrip.prepare(
     `INSERT OR IGNORE INTO journal_entry
        (id, date, written_at, tz_offset, author_id, body, source, shared, created_at)
      VALUES (?, ?, ?, ?, ?, ?, 'app', ?, ?)`
-  ).bind(id, localDate(at, offset), at, offset, person.id, body.body.trim(),
+  ).bind(id, date, at, offset, person.id, body.body.trim(),
          body.shared === false ? 0 : 1, nowIso()).run();
   return json({ ok: true, id });
 }
@@ -347,17 +357,34 @@ export async function toggleActivity(env, person, body) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   if (!body.id) return json({ error: "id required" }, 400);
   const done = body.done ? 1 : 0;
-  await env.roadtrip.prepare(
+  const res = await env.roadtrip.prepare(
     `UPDATE activity SET done = ?, done_date = ?, done_note = COALESCE(?, done_note) WHERE id = ?`
   ).bind(done, done ? (body.date || localDate(nowIso(), "-0500")) : null,
          body.note ?? null, body.id).run();
+  // A stale or mistyped id used to return ok:true, making a no-op
+  // indistinguishable from a real edit.
+  if (!res?.meta?.changes) return json({ error: "no such activity" }, 404);
   return json({ ok: true });
 }
 
 /** Link a day to a place. This is what makes an intention "visited". */
-export async function linkDayPlace(env, person, body) {
+export async function linkDayPlace(env, person, body, method) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   if (!body.date || !body.intention_id) return json({ error: "date and intention_id required" }, 400);
+
+  // Unlinking has to exist. Without it a mistaken tap permanently marks a place
+  // as reached, and there is no way back through the API.
+  if (method === "DELETE") {
+    await env.roadtrip.prepare(
+      `DELETE FROM day_intention WHERE date = ? AND intention_id = ?`
+    ).bind(body.date, body.intention_id).run();
+    return json({ ok: true, unlinked: true });
+  }
+
+  const exists = await env.roadtrip
+    .prepare(`SELECT 1 AS n FROM intention WHERE id = ?`).bind(body.intention_id).first();
+  if (!exists) return json({ error: "no such place" }, 404);
+
   await env.roadtrip.prepare(
     `INSERT OR IGNORE INTO day_intention (date, intention_id) VALUES (?, ?)`
   ).bind(body.date, body.intention_id).run();

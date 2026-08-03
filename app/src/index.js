@@ -10,6 +10,7 @@ import { currentPerson, mintToken, readToken, sessionCookie } from "./auth.js";
 import { SHELL } from "./shell.js";
 import * as api from "./api.js";
 import { STATE_ARCS } from "./geo.js";
+import { STATE_ARCS_FINE } from "./geo_fine.js";
 
 const json = (o, s = 200) =>
   new Response(JSON.stringify(o), { status: s, headers: { "content-type": "application/json" } });
@@ -52,6 +53,15 @@ export default {
 
     // Static and never changes. Cached hard so a phone fetches the outlines
     // once for the whole trip instead of on every visit to the map.
+    if (path === "/geo/states-fine.json") {
+      return new Response(JSON.stringify(STATE_ARCS_FINE), {
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "public, max-age=31536000, immutable",
+        },
+      });
+    }
+
     if (path === "/geo/states.json") {
       return new Response(JSON.stringify(STATE_ARCS), {
         headers: {
@@ -91,7 +101,7 @@ export default {
             ? api.deleteJournal(env, person, body)
             : api.createJournal(env, person, body);
         case "/api/activity":    return api.toggleActivity(env, person, body);
-        case "/api/visit":       return api.linkDayPlace(env, person, body);
+        case "/api/visit":       return api.linkDayPlace(env, person, body, request.method);
         default:                 return json({ error: "not found" }, 404);
       }
     }

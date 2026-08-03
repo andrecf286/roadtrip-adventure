@@ -95,9 +95,11 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .navbar{position:fixed;left:0;right:0;bottom:0;height:calc(var(--nav-h) + var(--safe-bot));
     background:rgba(251,249,246,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line);
     display:flex;z-index:45;padding-bottom:var(--safe-bot);max-width:640px;margin:0 auto}
-  .navbar button{flex:1;border:0;background:none;font:inherit;font-size:12px;color:var(--ink-3);
-    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;cursor:pointer;padding:10px 4px;border-radius:12px;margin:6px 4px}
-  .navbar button .ic{font-size:26px;line-height:1}
+  .navbar button{flex:1;min-width:0;border:0;background:none;font:inherit;font-size:10.5px;
+    letter-spacing:-.1px;color:var(--ink-3);display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:4px;cursor:pointer;padding:8px 2px;border-radius:11px;margin:6px 2px;
+    white-space:nowrap}
+  .navbar button .ic{font-size:22px;line-height:1}
   .navbar button.on{color:var(--sun);font-weight:640;background:var(--sun-soft)}
   .back{position:sticky;top:calc(6px + var(--safe-top));z-index:50;border:0;background:rgba(255,255,255,.92);
     border-radius:99px;width:38px;height:38px;font-size:18px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.1);margin-bottom:6px}
@@ -128,9 +130,10 @@ export const SHELL = String.raw`<!DOCTYPE html>
   <nav class="navbar">
     <button class="on" data-tab="today"><span class="ic">&#128205;</span>Today</button>
     <button data-tab="trip"><span class="ic">&#128197;</span>Trip</button>
+    <button data-tab="map"><span class="ic">&#128506;</span>Map</button>
     <button data-tab="journal"><span class="ic">&#9997;</span>Journal</button>
     <button data-tab="photos"><span class="ic">&#128247;</span>Photos</button>
-    <button data-tab="places"><span class="ic">&#128506;</span>Itinerary</button>
+    <button data-tab="places"><span class="ic">&#128204;</span>Plan</button>
   </nav>
 
 <script>
@@ -139,7 +142,18 @@ var ME = null, POS = null;
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
 function el(id){ return document.getElementById(id); }
-function get(u){ return fetch(u,{credentials:"same-origin"}).then(function(r){ return r.json(); }); }
+function get(u){
+  return fetch(u,{credentials:"same-origin"})
+    .then(function(r){ return r.json(); })
+    .catch(function(){ return null; });
+}
+/* Renders a recoverable message into a screen whose data never arrived,
+   instead of leaving it blank. */
+function offlineInto(id, retry){
+  var e = el(id); if (!e) return;
+  e.innerHTML = '<h1>No connection</h1><p class="sub">Can\'t load this right now.</p>' +
+    '<button class="ghostbtn" onclick="' + retry + '">Try again</button>';
+}
 function send(u,m,b){ return fetch(u,{method:m,credentials:"same-origin",
   headers:{"content-type":"application/json"},body:JSON.stringify(b)}).then(function(r){ return r.json(); }); }
 
@@ -215,6 +229,7 @@ function tab(name){
   for(var i=0;i<bs.length;i++) bs[i].classList.toggle("on", bs[i].dataset.tab===name);
   if(name==="today") loadToday();
   if(name==="trip") loadTrip();
+  if(name==="map") loadMapScreen();
   if(name==="journal") loadJournal();
   if(name==="photos") loadPhotos();
   if(name==="places") loadPlaces();
@@ -225,6 +240,7 @@ function tab(name){
 function loadToday(){
   show("today");
   get("/api/today").then(function(d){
+    if (!d) { offlineInto("s-today", "loadToday()"); return; }
     POS = d.position;
     var mpg = d.mpg ? '<div class="stat"><span>'+d.mpg.value+'</span><small>mpg</small>'+
         '<span class="qual">'+esc(d.mpg.method)+'</span></div>'
@@ -356,6 +372,25 @@ function discardStop(id){
   send("/api/stop","DELETE",{ id:id }).then(function(){ tab("today"); }, function(){ tab("today"); });
 }
 
+/* Patch a stop that may not have reached the server yet.
+   The original sent the PATCH straight to the API. Offline that failed
+   silently, and when signal returned the queue POSTed the ORIGINAL bare stop —
+   so the gallons, the price and the note, typed standing at a pump, were gone
+   with no error. Exactly the case the queue exists for. Now the queued item is
+   amended in place if it is still waiting; only an already-delivered stop goes
+   over the wire. */
+function patchStopLocal(id, patch){
+  var q = queue(), found = false;
+  for (var i=0;i<q.length;i++){
+    if (q[i].client_id === id){
+      for (var k in patch) if (k !== "id") q[i][k] = patch[k];
+      found = true;
+    }
+  }
+  if (found){ setQueue(q); return flush(); }
+  return flush().then(function(){ return send("/api/stop","PATCH",patch); });
+}
+
 function finishStop(id){
   var g = el("f-gal"), p = el("f-ppg"), c = el("f-cost"), n = el("f-note");
   var patch = { id:id };
@@ -365,7 +400,7 @@ function finishStop(id){
   if (n && n.value.trim()) patch.note = n.value.trim();
   var done = function(){ tab("today"); };
   if (Object.keys(patch).length > 1) {
-    flush().then(function(){ return send("/api/stop","PATCH",patch); }).then(done, done);
+    patchStopLocal(id, patch).then(done, done);
   } else done();
 }
 
@@ -410,6 +445,7 @@ function saveStaying(kind){
 function loadTrip(){
   show("trip");
   get("/api/trip").then(function(d){
+    if (!d) { offlineInto("s-trip", "loadTrip()"); return; }
     var past = d.days.map(function(x){
       var bits=[]; if(x.places) bits.push(esc(x.places));
       if(x.photos) bits.push(x.photos+" photo"+(x.photos===1?"":"s"));
@@ -471,10 +507,34 @@ function loadDay(date){
   });
 }
 
+/* Two bugs lived here. The entry carried no tz_offset, so the server defaulted
+   to Central and anything written after ~7pm once they were in Mountain or
+   Pacific landed on TOMORROW's page. And writing on a past day still stamped
+   today, so the author watched their entry vanish from the day they wrote it
+   on. Both halves are sent now. */
+function tzOffset(){
+  var mins = -new Date().getTimezoneOffset();
+  var sign = mins < 0 ? "-" : "+";
+  return sign + String(Math.floor(Math.abs(mins)/60)).padStart(2,"0") +
+         String(Math.abs(mins)%60).padStart(2,"0");
+}
 function saveJournal(date){
   var t = el("j-body"); if(!t || !t.value.trim()) return;
-  send("/api/journal","POST",{ body:t.value, written_at:new Date().toISOString() })
-    .then(function(){ loadDay(date); });
+  var body = t.value;
+  send("/api/journal","POST",{ body:body, date:date,
+       written_at:new Date().toISOString(), tz_offset:tzOffset() })
+    .then(function(r){
+      if (!r || !r.ok) { alertInline(t, "Couldn't save — try again."); return; }
+      loadDay(date);
+    });
+}
+/* A failed write used to re-render the list and silently discard what was
+   typed. Keep the text, say what happened. */
+function alertInline(field, msg){
+  if (!field) return;
+  var p = document.createElement("p");
+  p.className = "tiny"; p.style.color = "#a8332a"; p.textContent = msg;
+  field.parentNode.appendChild(p);
 }
 
 /* One stream: written entries and observation stops, interleaved by time.
@@ -483,6 +543,7 @@ function saveJournal(date){
 function loadJournal(){
   show("journal");
   get("/api/journal-feed").then(function(d){
+    if (!d) { offlineInto("s-journal", "loadJournal()"); return; }
     var body = d.entries.map(function(e){
       var tag = e.source === "observation"
         ? '<span class="badge" style="font-size:11px;padding:3px 9px">' + ICON.observation + ' seen</span>'
@@ -509,13 +570,18 @@ function loadJournal(){
 
 function saveJournalFeed(){
   var t = el("jf-body"); if(!t || !t.value.trim()) return;
-  send("/api/journal","POST",{ body:t.value, written_at:new Date().toISOString() })
-    .then(function(){ loadJournal(); });
+  send("/api/journal","POST",{ body:t.value, written_at:new Date().toISOString(),
+       tz_offset:tzOffset() })
+    .then(function(r){
+      if (!r || !r.ok) { alertInline(t, "Couldn't save — try again."); return; }
+      loadJournal();
+    });
 }
 
 function loadPhotos(){
   show("photos");
   get("/api/photos").then(function(d){
+    if (!d) { offlineInto("s-photos", "loadPhotos()"); return; }
     var grid = d.photos.map(function(p){
       return '<div class="thumb" style="width:100%;height:112px;border-radius:10px"></div>';
     }).join("");
@@ -534,6 +600,7 @@ function loadPhotos(){
 function loadPlaces(){
   show("places");
   get("/api/places").then(function(d){
+    if (!d) { offlineInto("s-places", "loadPlaces()"); return; }
     var visited = d.places.filter(function(p){ return p.visited; }).length;
     el("s-places").innerHTML = '<h1>Itinerary</h1><p class="sub">'+d.places.length+
       ' places &middot; '+visited+' reached so far</p>' +
@@ -551,9 +618,18 @@ function loadPlaces(){
 function loadPlace(id){
   show("place");
   get("/api/place?id="+encodeURIComponent(id)).then(function(d){
+    if (!d || !d.intention) {
+      el("s-place").innerHTML =
+        '<button class="back" onclick="tab(\'places\')">&larr;</button>' +
+        '<h1>Not found</h1><p class="sub">That place is no longer in the plan.</p>';
+      return;
+    }
     var i = d.intention;
     var acts = d.activities.map(function(a){
-      return '<li onclick="tickActivity(\''+a.id+'\','+(a.done?0:1)+',\''+id+'\')">' +
+      var tappable = ME && ME.role === "author";
+      return '<li' + (tappable
+        ? ' onclick="tickActivity(\''+a.id+'\','+(a.done?0:1)+',\''+id+'\')"'
+        : ' style="cursor:default"') + '>' +
         '<span class="box'+(a.done?" done":"")+'"></span><span'+(a.done?' class="done-txt"':'')+'>' +
         esc(a.name)+(a.distance_mi?' &middot; '+a.distance_mi+' mi':'') +
         (a.detail&&!a.done?'<span class="hers">'+esc(a.detail)+'</span>':'')+'</span></li>';
@@ -652,7 +728,7 @@ function mapSvg(d, arcs, W, H){
     ? '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="10" fill="#1f6f5c" opacity=".22"/>' +
       '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="5" fill="#1f6f5c" stroke="#fff" stroke-width="1.5"/>' : "";
   return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:100%">' +
-    '<rect width="'+W+'" height="'+H+'" fill="#f4f7f4"/>' + land +
+    '<rect width="'+W+'" height="'+H+'" fill="#f4f7f4"/>' + '<g id="landlayer">' + land + '</g>' +
     '<g id="routelayer"><path d="'+route+'" fill="none" stroke="#1f6f5c" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/></g>' +
     '<circle cx="'+px(st0[0]).toFixed(1)+'" cy="'+py(st0[1]).toFixed(1)+'" r="4" fill="#14110e" stroke="#fff" stroke-width="1.5"/>' +
     pins + here + '</svg>';
@@ -662,77 +738,34 @@ function geo(){
   return get("/geo/states.json").then(function(g){ GEO = g; return g; });
 }
 
+/* 90 KB against the coarse tier's 25 — not worth spending on a campground
+   connection until somebody actually zooms in. Fetched on first zoom, then
+   cached immutably for the rest of the trip. */
+var GEO_FINE = null, GEO_FINE_PENDING = false;
+function geoFine(){
+  if (GEO_FINE) return Promise.resolve(GEO_FINE);
+  if (GEO_FINE_PENDING) return Promise.resolve(null);
+  GEO_FINE_PENDING = true;
+  return get("/geo/states-fine.json").then(function(g){
+    GEO_FINE = g; GEO_FINE_PENDING = false; return g;
+  }, function(){ GEO_FINE_PENDING = false; return null; });
+}
+
 function loadMapScreen(){
   show("map");
   Promise.all([get("/api/map"), geo()]).then(function(res){
     var d = res[0], arcs = res[1] || [];
+    if (!d) { offlineInto("s-map", "loadMapScreen()"); return; }
 
-    var pts = [];
-    (d.tracks||[]).forEach(function(t){ t.forEach(function(c){ pts.push(c); }); });
-    if (d.current) pts.push([d.current.lon, d.current.lat]);
-
-    if (!pts.length){
-      el("s-map").innerHTML = '<h1>Where they have been</h1><div class="maparea">' +
-        '<p class="empty" style="padding:20px">No track yet.</p></div>';
-      return;
-    }
-
-    // Fit to the route, then widen so there is recognisable country around it
-    // rather than a line filling the frame edge to edge.
-    var xs = pts.map(function(p){ return p[0]; }), ys = pts.map(function(p){ return p[1]; });
-    var x0 = Math.min.apply(null,xs), x1 = Math.max.apply(null,xs);
-    var y0 = Math.min.apply(null,ys), y1 = Math.max.apply(null,ys);
-    var cx = (x0+x1)/2, cy = (y0+y1)/2;
-    var W = 360, H = 340;
-
-    // Equirectangular with a latitude correction, so the country is not
-    // horizontally stretched the way a naive lon/lat plot makes it.
-    var kx = Math.cos(cy * Math.PI/180);
-    var spanX = Math.max((x1-x0) * kx, 0.01), spanY = Math.max(y1-y0, 0.01);
-    var pad = 2.2;
-    var scale = Math.min(W/(spanX*pad), H/(spanY*pad));
-    var px = function(lon){ return W/2 + (lon-cx) * kx * scale; };
-    var py = function(lat){ return H/2 - (lat-cy) * scale; };
-
-    var land = arcs.map(function(a){
-      var dd = "", any = false;
-      for (var i=0;i<a.length;i++){
-        var X = px(a[i][0]), Y = py(a[i][1]);
-        if (X < -400 || X > W+400 || Y < -400 || Y > H+400) { dd += ""; }
-        dd += (i? "L":"M") + X.toFixed(1) + " " + Y.toFixed(1);
-        any = true;
-      }
-      return any ? '<path d="'+dd+'" fill="none" stroke="#d3ddd6" stroke-width="1"/>' : "";
-    }).join("");
-
-    var route = pts.map(function(p,i){
-      return (i?"L":"M") + px(p[0]).toFixed(1) + " " + py(p[1]).toFixed(1);
-    }).join(" ");
-
-    var pins = (d.stops||[]).map(function(st){
-      return '<circle cx="'+px(st.lon).toFixed(1)+'" cy="'+py(st.lat).toFixed(1)+
-             '" r="3.5" fill="#c8621f" stroke="#fff" stroke-width="1"/>';
-    }).join("");
-
-    var start = pts[0];
-    var here = d.current
-      ? '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+
-        '" r="10" fill="#1f6f5c" opacity=".22"/>' +
-        '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+
-        '" r="5" fill="#1f6f5c" stroke="#fff" stroke-width="1.5"/>' : "";
-
-    var svg = '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:100%">' +
-      '<rect width="'+W+'" height="'+H+'" fill="#f4f7f4"/>' + land +
-      '<path d="'+route+'" fill="none" stroke="#1f6f5c" stroke-width="2.6" ' +
-        'stroke-linejoin="round" stroke-linecap="round"/>' +
-      '<circle cx="'+px(start[0]).toFixed(1)+'" cy="'+py(start[1]).toFixed(1)+
-        '" r="4" fill="#14110e" stroke="#fff" stroke-width="1.5"/>' +
-      pins + here + '</svg>';
-
+    // ONE renderer, shared with the Trip mini-map. A second copy lived here and
+    // that duplication was exactly what killed progressive zoom: this screen
+    // emitted an SVG with no routelayer for detail to paint into, and left PROJ
+    // holding the mini-map's 210px projection, so every detail fetch computed a
+    // bounding box for the wrong region of the wrong map.
     el("s-map").innerHTML =
-      '<button class="back" onclick="tab(\'trip\')">&larr;</button>' +
-      '<h1>Where they have been</h1><p class="sub">'+d.miles+' miles</p>' +
-      '<div class="maparea" id="bigmap" style="height:60vh;touch-action:none">'+svg+'</div>' +
+      '<h1>Where they have been</h1><p class="sub">'+(d.miles||0)+' miles</p>' +
+      '<div class="maparea" id="bigmap" style="height:58vh;touch-action:none">' +
+        mapSvg(d, arcs, 360, 340) + '</div>' +
       '<div class="row" style="margin-top:8px;gap:8px">' +
         '<button class="ghostbtn" style="margin:0;flex:1" onclick="zoomBy(1/1.6)">&minus;</button>' +
         '<button class="ghostbtn" style="margin:0;flex:1" onclick="zoomBy(1.6)">+</button>' +
@@ -747,33 +780,6 @@ function loadMapScreen(){
   });
 }
 
-/* Pinch, drag and double-tap on the map.
-   Implemented by moving the SVG viewBox rather than a CSS transform, so the
-   route and the state outlines stay crisp at any zoom instead of turning into
-   a blurry upscaled bitmap — the whole reason this is vector in the first
-   place. touch-action:none on the container stops Safari hijacking the gesture
-   to scroll the page. */
-var VB0 = null, VB = null;
-function svgEl(){ var b = el("bigmap"); return b && b.querySelector("svg"); }
-function applyVB(){
-  var sv = svgEl(); if (!sv || !VB) return;
-  sv.setAttribute("viewBox", VB.x.toFixed(2)+" "+VB.y.toFixed(2)+" "+VB.w.toFixed(2)+" "+VB.h.toFixed(2));
-}
-function zoomAt(factor, cx, cy){
-  if (!VB) return;
-  var nw = VB.w / factor, nh = VB.h / factor;
-  // Clamp: 12x in, and never further out than the original fit.
-  if (nw < VB0.w/12 || nw > VB0.w) return;
-  VB = { x: cx - (cx - VB.x) * (nw/VB.w), y: cy - (cy - VB.y) * (nh/VB.h), w: nw, h: nh };
-  applyVB();
-}
-function zoomBy(f){ if (VB) { zoomAt(f, VB.x + VB.w/2, VB.y + VB.h/2); wantDetail(); } }
-
-/* Zoom used to magnify the same 90-points-per-segment overview, which is why
-   more zoom gave no more road. The full geometry was in the database the whole
-   time — about 8,400 points for the first two days against the 720 the overview
-   ships — it was simply never requested. Once the viewport is meaningfully
-   tighter than the full fit, ask for what is inside it. */
 var DETAIL_T = null, DETAIL_KEY = null;
 function wantDetail(){ clearTimeout(DETAIL_T); DETAIL_T = setTimeout(fetchDetail, 260); }
 
@@ -792,6 +798,18 @@ function fetchDetail(){
   var key = [w,s2,e,n].map(function(v){ return v.toFixed(2); }).join(",");
   if (key === DETAIL_KEY) return;
   DETAIL_KEY = key;
+
+  // Swap in finer coastlines at the same moment the route gets finer,
+  // otherwise the road sharpens against borders that stay visibly polygonal.
+  geoFine().then(function(fine){
+    var lay = document.getElementById("landlayer");
+    if (!fine || !lay || !PROJ) return;
+    lay.innerHTML = fine.map(function(a){
+      var dd = "";
+      for (var i=0;i<a.length;i++) dd += (i?"L":"M")+PROJ.px(a[i][0]).toFixed(1)+" "+PROJ.py(a[i][1]).toFixed(1);
+      return '<path d="'+dd+'" fill="none" stroke="#d3ddd6" stroke-width="1"/>';
+    }).join("");
+  });
 
   get("/api/track?w="+w+"&s="+s2+"&e="+e+"&n="+n+"&max=2500").then(function(r){
     if (!r || !r.tracks || DETAIL_KEY !== key) return;
@@ -871,7 +889,24 @@ function attachZoom(){
 var nav = document.querySelectorAll(".navbar button");
 for(var i=0;i<nav.length;i++)(function(b){ b.onclick=function(){ tab(b.dataset.tab); }; })(nav[i]);
 
-get("/api/me").then(function(m){ ME=m; paintQueue(); flush(); tab("today"); });
+/* Every screen fetches, and none of them had an error path: one failed request
+   on campground wifi left a white page with a nav bar and no way to recover.
+   Boot degrades to a readable message with a retry instead. */
+function bootFail(){
+  document.getElementById("s-today").innerHTML =
+    '<h1>No connection</h1>' +
+    '<p class="sub">Can\'t reach the trip right now. Anything you record is still saved on your phone ' +
+    'and will send itself when you have signal.</p>' +
+    '<button class="ghostbtn" onclick="boot()">Try again</button>';
+  show("today");
+}
+function boot(){
+  get("/api/me").then(function(m){
+    if (!m || !m.id) return bootFail();
+    ME = m; paintQueue(); flush(); tab("today");
+  }, bootFail);
+}
+boot();
 </script>
 </body>
 </html>`;
