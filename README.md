@@ -147,3 +147,28 @@ None are committed. The Bouncie `authKey` is a Worker secret (`AUTH_KEY`), set w
 - `GET /v1/trips` accepts a date window of **at most one week**. Backfilling six weeks
   means six sequential calls; a single wide range fails.
 - Trip data is retained indefinitely, back to 2020-05-21.
+
+## The app
+
+Deployed at **https://roadtripadventure.app** as a second Worker, `roadtrip-app`,
+sharing D1 with the ingest Worker and nothing else. The separation is the point:
+ingest holds the one irrecoverable thing on this project and should almost never
+be redeployed, while the app deploys constantly.
+
+Auth is a signed token carrying a person id and a 120-day expiry, delivered as a
+one-time link and stored in an httpOnly cookie. No password, no email round-trip
+at use time — Lily and Ada are opening this at a gas pump, not at a desk.
+`GET /mint?k=$MINT_SECRET` prints all six links for out-of-band distribution;
+standing up domain-verified transactional email to deliver six links once would
+be more infrastructure than the problem has.
+
+Stops queue in localStorage when there is no signal and flush on reconnect. The
+client mints the id, so a retry can never double-record.
+
+Polylines are thinned server-side before they reach a phone — Bouncie records a
+point every few seconds and the raw map payload was 179 KB on day two. Ninety
+points per segment is indistinguishable at this zoom and keeps the whole trip
+under ~15 KB.
+
+Deploy: `cd app && npx wrangler deploy`. Secrets are `SESSION_SECRET` and
+`MINT_SECRET`.

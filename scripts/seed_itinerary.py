@@ -33,12 +33,12 @@ DEPARTURE = date(2026, 8, 2)
 HORIZON = date(2026, 9, 15)
 
 PEOPLE = [
-    ("lily", "Lily Cook", "author", None),
-    ("ada", "Ada Menk-Brown", "author", None),
-    ("andy", "Andy Foti", "viewer", "acfoti@gmail.com"),
-    ("jana", "Jana Cook", "viewer", "jana.k.cook@gmail.com"),
-    ("amelia", "Amelia Menk Brown", "viewer", None),
-    ("david", "David Brown", "viewer", None),
+    ("lily",   "Lily Cook",         "author", "lily.jewel@icloud.com"),
+    ("ada",    "Ada Menk-Brown",    "author", "adamenkbrown@gmail.com"),
+    ("andy",   "Andy Foti",         "viewer", "acfoti@gmail.com"),
+    ("jana",   "Jana Cook",         "viewer", "jana.k.cook@gmail.com"),
+    ("amelia", "Amelia Menk Brown", "viewer", "amelia.menk@gmail.com"),
+    ("david",  "David Brown",       "viewer", "drbrown745@yahoo.com"),
 ]
 
 MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,

@@ -1,0 +1,27 @@
+{
+  // Deliberately a SECOND Worker, separate from roadtrip-ingest.
+  //
+  // The ingest Worker holds the one thing on this project that cannot be
+  // recovered: the timestamped Bouncie breadcrumbs, which are push-only and
+  // never replay. It should be boring and almost never redeployed. This app
+  // will be deployed dozens of times over the next few weeks, often carelessly,
+  // often over a phone tether. Separating them means nothing done here can
+  // interrupt collection. They share the D1 database and nothing else.
+  //
+  // Do NOT add a `routes` block — the available Cloudflare token lacks Workers
+  // Routes edit on this zone and the deploy fails with auth error 10000. The
+  // custom domain is bound via the account-scoped
+  // PUT /accounts/{acct}/workers/domains endpoint instead. See the README.
+  "name": "roadtrip-app",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true },
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "roadtrip",
+      "database_name": "roadtrip",
+      "database_id": "7814cda6-3bcb-4ae1-aae8-af6f67aed3a1"
+    }
+  ]
+}
