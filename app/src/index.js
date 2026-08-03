@@ -9,6 +9,7 @@
 import { currentPerson, mintToken, readToken, sessionCookie } from "./auth.js";
 import { SHELL } from "./shell.js";
 import * as api from "./api.js";
+import { STATE_ARCS } from "./geo.js";
 
 const json = (o, s = 200) =>
   new Response(JSON.stringify(o), { status: s, headers: { "content-type": "application/json" } });
@@ -49,12 +50,23 @@ export default {
 
     if (path === "/health") return json({ ok: true, service: "roadtrip-app" });
 
+    // Static and never changes. Cached hard so a phone fetches the outlines
+    // once for the whole trip instead of on every visit to the map.
+    if (path === "/geo/states.json") {
+      return new Response(JSON.stringify(STATE_ARCS), {
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "public, max-age=31536000, immutable",
+        },
+      });
+    }
+
     /* --------------------------- everything below needs a session -------- */
     const person = await currentPerson(request, env);
 
     if (path.startsWith("/api/")) {
       if (!person) return json({ error: "unauthorized" }, 401);
-      const body = request.method === "POST" || request.method === "PATCH"
+      const body = ["POST", "PATCH", "DELETE"].includes(request.method)
         ? await request.json().catch(() => ({})) : {};
 
       switch (path) {
@@ -67,6 +79,7 @@ export default {
         case "/api/reservation": return api.reservation(env, url.searchParams.get("id"));
         case "/api/map":         return api.map(env);
         case "/api/stop":
+          if (request.method === "DELETE") return api.deleteStop(env, person, body);
           return request.method === "PATCH"
             ? api.updateStop(env, person, body)
             : api.createStop(env, person, body);

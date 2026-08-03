@@ -119,6 +119,7 @@ export const SHELL = String.raw`<!DOCTYPE html>
   <section class="screen" id="s-place"></section>
   <section class="screen" id="s-res"></section>
   <section class="screen" id="s-stop"></section>
+  <section class="screen" id="s-staying"></section>
 
   <div class="queued" id="queued"></div>
 
@@ -196,19 +197,29 @@ function loadToday(){
     var t = d.tonight;
     var tonight = "";
     if (t) {
-      var when = t.whenish === "tonight" ? "Tonight"
-        : "Next stay &middot; " + fmtShort(t.check_in_date);
+      var when = t.actual ? "Tonight &middot; where they actually are"
+        : (t.whenish === "tonight" ? "Tonight"
+        : "Next stay &middot; " + fmtShort(t.check_in_date));
       var line = t.check_in_time ? "Check in " + esc(t.check_in_time)
         : (t.check_in_date ? "Arriving " + fmtShort(t.check_in_date) : "");
       if (t.check_out_time) line += " &middot; out " + esc(t.check_out_time);
       else if (t.check_out_date) line += " &middot; until " + fmtShort(t.check_out_date);
-      tonight = '<h2>' + when + '</h2><div class="card tapme" onclick="loadRes(\'' + t.id + '\')">' +
+      tonight = '<h2>' + when + '</h2><div class="card' + (t.actual ? '' : ' tapme') + '"' +
+        (t.actual ? '' : ' onclick="loadRes(\'' + t.id + '\')"') + '>' +
         '<div class="row"><b>' + esc(t.name) + '</b>' +
         (t.place_name ? '<span class="muted">' + esc(t.place_name) + '</span>' : '') + '</div>' +
         (line ? '<p class="muted" style="margin:7px 0 0">' + line + '</p>' : '') +
         '<p class="tiny" style="margin:5px 0 0">' +
           (t.confirmation ? 'Receipt <span class="conf">' + esc(t.confirmation) + '</span> &middot; ' : '') +
-          (t.cost != null ? '$' + t.cost.toFixed(2) : '') + '</p></div>';
+          (t.cost != null ? '$' + t.cost.toFixed(2) : '') + '</p></div>' +
+        (ME && ME.role === "author"
+          ? '<button class="ghostbtn" onclick="openStaying()">' +
+            (t.actual ? "Change where we are staying" : "We are staying somewhere else") +
+            '</button>' : '');
+      if (d.planned_tonight) {
+        tonight += '<p class="tiny" style="margin:9px 0 0">Plan said: ' +
+          esc(d.planned_tonight.name) + '. Left as it was — it is a plan, not a promise.</p>';
+      }
     }
     var last = d.last_stop
       ? '<h2>Last stop</h2><div class="card"><div class="row"><span>'+(ICON[d.last_stop.kind]||"")+' '+
@@ -254,17 +265,34 @@ function saveStop(kind){
 
   function finish(){
     enqueue(item);
+    // Note first. It is the only field worth anything in twenty years — the
+    // cost of a tank is not the memory. Money follows, and for gas the two
+    // numbers actually printed on the pump come last, with the total derived.
+    var extra =
+      '<div class="card"><label class="muted">What happened here?</label>' +
+      '<textarea id="f-note" style="min-height:96px;margin-top:8px" placeholder="Optional. A line is plenty."></textarea></div>';
+    if (kind === "gas") {
+      extra +=
+        '<div class="card"><label class="muted">Gallons</label>' +
+        '<input type="number" step="0.001" id="f-gal" inputmode="decimal" oninput="calcFuel()" style="margin-top:8px">' +
+        '<p class="tiny" style="margin:6px 0 0">Three decimals, straight off the pump.</p></div>' +
+        '<div class="card"><label class="muted">Price per gallon</label>' +
+        '<input type="number" step="0.001" id="f-ppg" inputmode="decimal" oninput="calcFuel()" style="margin-top:8px"></div>' +
+        '<div class="card"><div class="row"><span class="muted">Total</span>' +
+        '<b id="f-total">&mdash;</b></div><p class="tiny" style="margin:6px 0 0">Computed. Keeps mpg honest.</p></div>';
+    } else {
+      extra +=
+        '<div class="card"><label class="muted">Cost</label>' +
+        '<input type="number" step="0.01" id="f-cost" inputmode="decimal" style="margin-top:8px"></div>';
+    }
+
     el("s-stop").innerHTML =
-      '<div style="text-align:center;padding-top:56px"><div style="font-size:52px">'+ICON[kind]+'</div>' +
+      '<div style="text-align:center;padding-top:44px"><div style="font-size:52px">'+ICON[kind]+'</div>' +
       '<h1 style="margin-top:14px">'+kind.charAt(0).toUpperCase()+kind.slice(1)+' stop saved</h1>' +
       '<p class="sub">'+fmtTime(item.occurred_at)+'</p></div>' +
-      '<h2>Add anything? (optional)</h2>' +
-      (kind==="gas"
-        ? '<div class="card"><label class="muted">Gallons</label><input type="number" step="0.01" id="f-gal" inputmode="decimal" style="margin-top:8px"><p class="tiny" style="margin:6px 0 0">Keeps mpg accurate.</p></div>'
-        : '') +
-      '<div class="card"><label class="muted">Cost</label><input type="number" step="0.01" id="f-cost" inputmode="decimal" style="margin-top:8px"></div>' +
-      '<div class="card"><label class="muted">Where / a note</label><input type="text" id="f-note" style="margin-top:8px"></div>' +
-      '<div class="actionbar"><button class="bigbtn" onclick="finishStop(\''+id+'\')">Done</button></div>';
+      '<h2>Add anything? (optional)</h2>' + extra +
+      '<div class="actionbar"><button class="bigbtn" onclick="finishStop(\''+id+'\')">Done</button>' +
+      '<button class="ghostbtn" style="color:#a8332a;border-color:#e8cdc9" onclick="discardStop(\''+id+'\')">Discard this stop</button></div>';
   }
 
   if (navigator.geolocation) {
@@ -274,15 +302,70 @@ function saveStop(kind){
   } else finish();
 }
 
+function calcFuel(){
+  var g = el("f-gal"), p = el("f-ppg"), t = el("f-total");
+  if(!t) return;
+  var gv = g && parseFloat(g.value), pv = p && parseFloat(p.value);
+  t.innerHTML = (gv && pv) ? "$" + (Math.round(gv*pv*100)/100).toFixed(2) : "&mdash;";
+}
+
+/* A stop saves on the first tap, which is what makes it fast enough to use at
+   a pump — so a mis-tap is inevitable and there has to be a way out. Clears the
+   offline queue entry too, in case it never reached the server. */
+function discardStop(id){
+  var q = queue().filter(function(x){ return x.client_id !== id; });
+  setQueue(q);
+  send("/api/stop","DELETE",{ id:id }).then(function(){ tab("today"); }, function(){ tab("today"); });
+}
+
 function finishStop(id){
-  var g = el("f-gal"), c = el("f-cost"), n = el("f-note");
+  var g = el("f-gal"), p = el("f-ppg"), c = el("f-cost"), n = el("f-note");
   var patch = { id:id };
   if (g && g.value) patch.gallons = parseFloat(g.value);
+  if (p && p.value) patch.price_per_gallon = parseFloat(p.value);
   if (c && c.value) patch.cost = parseFloat(c.value);
-  if (n && n.value) patch.note = n.value;
+  if (n && n.value.trim()) patch.note = n.value.trim();
   var done = function(){ tab("today"); };
   if (Object.keys(patch).length > 1) {
     flush().then(function(){ return send("/api/stop","PATCH",patch); }).then(done, done);
+  } else done();
+}
+
+/* Somewhere unplanned. Recorded as a stop rather than by editing the
+   itinerary: the plan stays as Lily wrote it and reality is stored alongside,
+   which is the whole aspirational-itinerary premise. */
+function openStaying(){
+  show("staying");
+  el("s-staying").innerHTML =
+    '<button class="back" onclick="tab(\'today\')">&larr;</button>' +
+    '<h1>Where are you staying?</h1>' +
+    '<p class="sub">This does not change the itinerary. It records where you actually are.</p>' +
+    '<div class="card"><label class="muted">Name of the place</label>' +
+    '<input type="text" id="stay-name" placeholder="Whatever you would call it" style="margin-top:8px"></div>' +
+    '<div class="card"><label class="muted">A note (optional)</label>' +
+    '<textarea id="stay-note" style="min-height:90px;margin-top:8px"></textarea></div>' +
+    '<h2>What kind?</h2><div class="grid">' +
+    '<div class="kind" onclick="saveStaying(\'campsite\')"><span class="ic">' + ICON.campsite +
+      '</span><span class="lb">Campsite</span></div>' +
+    '<div class="kind" onclick="saveStaying(\'lodging\')"><span class="ic">' + ICON.lodging +
+      '</span><span class="lb">Lodging</span></div>' +
+    '</div>';
+}
+
+function saveStaying(kind){
+  var n = el("stay-name"), note = el("stay-note");
+  var id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
+  var mins = -new Date().getTimezoneOffset();
+  var sign = mins < 0 ? "-" : "+";
+  var off = sign + String(Math.floor(Math.abs(mins)/60)).padStart(2,"0") +
+            String(Math.abs(mins)%60).padStart(2,"0");
+  var item = { client_id:id, kind:kind, occurred_at:new Date().toISOString(), tz_offset:off,
+               place:(n && n.value.trim()) || null, note:(note && note.value.trim()) || null };
+  function done(){ enqueue(item); tab("today"); }
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(function(p){
+      item.lat = p.coords.latitude; item.lon = p.coords.longitude; done();
+    }, done, { timeout: 4000, maximumAge: 60000 });
   } else done();
 }
 
@@ -420,40 +503,86 @@ function loadRes(id){
   });
 }
 
+var GEO = null;
+function geo(){
+  if (GEO) return Promise.resolve(GEO);
+  return get("/geo/states.json").then(function(g){ GEO = g; return g; });
+}
+
 function loadMap(){
   show("map");
-  get("/api/map").then(function(d){
-    // Equirectangular, fitted to the bounding box of everything we have. Good
-    // enough at road-trip scale and needs no tiles, no key, no network.
+  Promise.all([get("/api/map"), geo()]).then(function(res){
+    var d = res[0], arcs = res[1] || [];
+
     var pts = [];
     (d.tracks||[]).forEach(function(t){ t.forEach(function(c){ pts.push(c); }); });
-    if(d.current) pts.push([d.current.lon, d.current.lat]);
-    var svg;
-    if(!pts.length){ svg = '<p class="empty" style="padding:20px">No track yet.</p>'; }
-    else {
-      var xs=pts.map(function(p){return p[0];}), ys=pts.map(function(p){return p[1];});
-      var x0=Math.min.apply(null,xs), x1=Math.max.apply(null,xs);
-      var y0=Math.min.apply(null,ys), y1=Math.max.apply(null,ys);
-      var padx=(x1-x0)*0.08+0.4, pady=(y1-y0)*0.08+0.4;
-      x0-=padx; x1+=padx; y0-=pady; y1+=pady;
-      var W=360,H=340;
-      var px=function(lon){ return (lon-x0)/(x1-x0)*W; };
-      var py=function(lat){ return H-(lat-y0)/(y1-y0)*H; };
-      var path = pts.map(function(p,i){ return (i?"L":"M")+px(p[0]).toFixed(1)+" "+py(p[1]).toFixed(1); }).join(" ");
-      var pins = d.stops.map(function(s){
-        return '<circle cx="'+px(s.lon).toFixed(1)+'" cy="'+py(s.lat).toFixed(1)+'" r="4" fill="#c8621f"/>';
-      }).join("");
-      var here = d.current
-        ? '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="9" fill="#1f6f5c" opacity=".28"/>' +
-          '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="5.5" fill="#1f6f5c"/>' : '';
-      svg = '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:100%">' +
-        '<rect width="'+W+'" height="'+H+'" fill="#eef1ec"/>' +
-        '<path d="'+path+'" fill="none" stroke="#1f6f5c" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>' +
-        pins + here + '</svg>';
+    if (d.current) pts.push([d.current.lon, d.current.lat]);
+
+    if (!pts.length){
+      el("s-map").innerHTML = '<h1>Where they have been</h1><div class="maparea">' +
+        '<p class="empty" style="padding:20px">No track yet.</p></div>';
+      return;
     }
-    el("s-map").innerHTML = '<h1>Where they\'ve been</h1><p class="sub">'+d.miles+
-      ' miles</p><div class="maparea">'+svg+'</div>' +
-      '<p class="tiny" style="margin-top:9px">Drawn from the Bouncie track.</p>';
+
+    // Fit to the route, then widen so there is recognisable country around it
+    // rather than a line filling the frame edge to edge.
+    var xs = pts.map(function(p){ return p[0]; }), ys = pts.map(function(p){ return p[1]; });
+    var x0 = Math.min.apply(null,xs), x1 = Math.max.apply(null,xs);
+    var y0 = Math.min.apply(null,ys), y1 = Math.max.apply(null,ys);
+    var cx = (x0+x1)/2, cy = (y0+y1)/2;
+    var W = 360, H = 340;
+
+    // Equirectangular with a latitude correction, so the country is not
+    // horizontally stretched the way a naive lon/lat plot makes it.
+    var kx = Math.cos(cy * Math.PI/180);
+    var spanX = Math.max((x1-x0) * kx, 0.01), spanY = Math.max(y1-y0, 0.01);
+    var pad = 2.2;
+    var scale = Math.min(W/(spanX*pad), H/(spanY*pad));
+    var px = function(lon){ return W/2 + (lon-cx) * kx * scale; };
+    var py = function(lat){ return H/2 - (lat-cy) * scale; };
+
+    var land = arcs.map(function(a){
+      var dd = "", any = false;
+      for (var i=0;i<a.length;i++){
+        var X = px(a[i][0]), Y = py(a[i][1]);
+        if (X < -400 || X > W+400 || Y < -400 || Y > H+400) { dd += ""; }
+        dd += (i? "L":"M") + X.toFixed(1) + " " + Y.toFixed(1);
+        any = true;
+      }
+      return any ? '<path d="'+dd+'" fill="none" stroke="#d3ddd6" stroke-width="1"/>' : "";
+    }).join("");
+
+    var route = pts.map(function(p,i){
+      return (i?"L":"M") + px(p[0]).toFixed(1) + " " + py(p[1]).toFixed(1);
+    }).join(" ");
+
+    var pins = (d.stops||[]).map(function(st){
+      return '<circle cx="'+px(st.lon).toFixed(1)+'" cy="'+py(st.lat).toFixed(1)+
+             '" r="3.5" fill="#c8621f" stroke="#fff" stroke-width="1"/>';
+    }).join("");
+
+    var start = pts[0];
+    var here = d.current
+      ? '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+
+        '" r="10" fill="#1f6f5c" opacity=".22"/>' +
+        '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+
+        '" r="5" fill="#1f6f5c" stroke="#fff" stroke-width="1.5"/>' : "";
+
+    var svg = '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:100%">' +
+      '<rect width="'+W+'" height="'+H+'" fill="#f4f7f4"/>' + land +
+      '<path d="'+route+'" fill="none" stroke="#1f6f5c" stroke-width="2.6" ' +
+        'stroke-linejoin="round" stroke-linecap="round"/>' +
+      '<circle cx="'+px(start[0]).toFixed(1)+'" cy="'+py(start[1]).toFixed(1)+
+        '" r="4" fill="#14110e" stroke="#fff" stroke-width="1.5"/>' +
+      pins + here + '</svg>';
+
+    el("s-map").innerHTML =
+      '<h1>Where they have been</h1><p class="sub">'+d.miles+' miles</p>' +
+      '<div class="maparea">'+svg+'</div>' +
+      '<p class="tiny" style="margin-top:9px">' +
+        '<span style="color:#14110e">&#9679;</span> home &middot; ' +
+        '<span style="color:#c8621f">&#9679;</span> stops &middot; ' +
+        '<span style="color:#1f6f5c">&#9679;</span> where they are now</p>';
   });
 }
 

@@ -94,6 +94,19 @@ export async function today(env) {
          FROM stop ORDER BY occurred_at DESC LIMIT 1`).first(),
   ]);
 
+  // Where they ACTUALLY slept beats where the plan said they would. The
+  // itinerary is aspirational; a recorded campsite is a fact. If they pulled
+  // into somewhere unplanned, that is tonight — no reservation required, and
+  // the plan is not edited or marked wrong, it simply was not what happened.
+  const actual = await env.roadtrip
+    .prepare(
+      `SELECT id, kind, place, note, occurred_at, cost
+         FROM stop
+        WHERE date = ? AND kind IN ('campsite','lodging')
+        ORDER BY occurred_at DESC LIMIT 1`)
+    .bind(date)
+    .first();
+
   // Whether the car is moving. A stale last point means parked, not broken.
   const ageMin = last ? (Date.now() - new Date(last.ts).getTime()) / 60000 : null;
   const moving = ageMin !== null && ageMin < 6 && (last.speed || 0) > 3;
@@ -111,7 +124,12 @@ export async function today(env) {
     miles_today: day?.miles ?? 0,
     miles_total: total?.miles ?? 0,
     mpg: mpg ? { value: mpg.mpg, method: mpg.method, miles: mpg.miles, gallons: mpg.gallons } : null,
-    tonight: next || null,
+    tonight: actual
+      ? { id: actual.id, name: actual.place || (actual.kind === "campsite" ? "Camped" : "Stayed"),
+          note: actual.note, cost: actual.cost, kind: actual.kind,
+          whenish: "tonight", actual: true }
+      : (next || null),
+    planned_tonight: actual ? (next || null) : null,
     last_stop: lastStop || null,
   });
 }
@@ -152,7 +170,7 @@ export async function day(env, date) {
   const [summary, stops, photos, journal, segments, places] = await Promise.all([
     env.roadtrip.prepare(`SELECT * FROM v_day_summary WHERE date = ?`).bind(date).first(),
     env.roadtrip.prepare(
-      `SELECT id, kind, place, note, occurred_at, lat, lon, cost, gallons
+      `SELECT id, kind, place, note, occurred_at, lat, lon, cost, gallons, price_per_gallon
          FROM stop WHERE date = ? ORDER BY occurred_at`).bind(date).all(),
     env.roadtrip.prepare(
       `SELECT id, r2_key, thumb_key, caption, taken_at, lat, lon, author_id
@@ -277,12 +295,14 @@ export async function createStop(env, person, body) {
   // retry the same stop and must not create duplicates.
   await env.roadtrip.prepare(
     `INSERT OR IGNORE INTO stop
-       (id, date, occurred_at, tz_offset, kind, lat, lon, place, note, cost, gallons, author_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, date, occurred_at, tz_offset, kind, lat, lon, place, note, cost,
+        gallons, price_per_gallon, author_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, localDate(at, offset), at, offset, body.kind,
     body.lat ?? null, body.lon ?? null, body.place ?? null, body.note ?? null,
-    body.cost ?? null, body.gallons ?? null, person.id, nowIso()
+    body.cost ?? null, body.gallons ?? null, body.price_per_gallon ?? null,
+    person.id, nowIso()
   ).run();
 
   return json({ ok: true, id });
@@ -291,11 +311,20 @@ export async function createStop(env, person, body) {
 export async function updateStop(env, person, body) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   if (!body.id) return json({ error: "id required" }, 400);
+  // The pump shows gallons and price per gallon; the total is arithmetic.
+  // Compute it here so nobody does multiplication standing at a fuel island.
+  let cost = body.cost ?? null;
+  if (cost == null && body.gallons != null && body.price_per_gallon != null) {
+    cost = Math.round(body.gallons * body.price_per_gallon * 100) / 100;
+  }
   await env.roadtrip.prepare(
-    `UPDATE stop SET gallons = COALESCE(?, gallons), cost = COALESCE(?, cost),
+    `UPDATE stop SET gallons = COALESCE(?, gallons),
+                     price_per_gallon = COALESCE(?, price_per_gallon),
+                     cost = COALESCE(?, cost),
                      note = COALESCE(?, note), place = COALESCE(?, place)
       WHERE id = ?`
-  ).bind(body.gallons ?? null, body.cost ?? null, body.note ?? null, body.place ?? null, body.id).run();
+  ).bind(body.gallons ?? null, body.price_per_gallon ?? null, cost,
+         body.note ?? null, body.place ?? null, body.id).run();
   return json({ ok: true });
 }
 
@@ -332,5 +361,20 @@ export async function linkDayPlace(env, person, body) {
   await env.roadtrip.prepare(
     `INSERT OR IGNORE INTO day_intention (date, intention_id) VALUES (?, ?)`
   ).bind(body.date, body.intention_id).run();
+  return json({ ok: true });
+}
+
+/**
+ * Discard a stop.
+ *
+ * The button saves on the first tap by design — that is what makes it fast
+ * enough to use at a pump — so mis-taps are inevitable and there has to be a
+ * way out. Any author can discard any stop; there are two of them and they are
+ * in the same car.
+ */
+export async function deleteStop(env, person, body) {
+  if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
+  if (!body.id) return json({ error: "id required" }, 400);
+  await env.roadtrip.prepare(`DELETE FROM stop WHERE id = ?`).bind(body.id).run();
   return json({ ok: true });
 }
