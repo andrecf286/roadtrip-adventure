@@ -378,3 +378,42 @@ export async function deleteStop(env, person, body) {
   await env.roadtrip.prepare(`DELETE FROM stop WHERE id = ?`).bind(body.id).run();
   return json({ ok: true });
 }
+
+/**
+ * The journal, read as one stream.
+ *
+ * An "observation" stop and a journal entry produce the same thing — a
+ * timestamped note in their own words. What differs is the gesture: an
+ * observation is one thumb at 70mph going past something; a journal entry is
+ * sitting down at a picnic table afterwards. Keeping both capture paths and
+ * merging the reading means there is never a question of which one to use.
+ */
+export async function journal(env) {
+  const [entries, observations] = await Promise.all([
+    env.roadtrip.prepare(
+      `SELECT j.id, j.date, j.written_at, j.body, j.shared, p.name AS author, 'entry' AS source
+         FROM journal_entry j LEFT JOIN person p ON p.id = j.author_id
+        ORDER BY j.written_at DESC`).all(),
+    env.roadtrip.prepare(
+      `SELECT s.id, s.date, s.occurred_at AS written_at, s.note AS body, 1 AS shared,
+              p.name AS author, 'observation' AS source, s.place, s.lat, s.lon
+         FROM stop s LEFT JOIN person p ON p.id = s.author_id
+        WHERE s.kind = 'observation' AND s.note IS NOT NULL AND trim(s.note) <> ''
+        ORDER BY s.occurred_at DESC`).all(),
+  ]);
+
+  const all = [...entries.results, ...observations.results]
+    .sort((a, b) => (a.written_at < b.written_at ? 1 : -1));
+
+  return json({ entries: all });
+}
+
+/** Every photo, newest first. Empty until the upload path exists. */
+export async function photos(env) {
+  const rows = await env.roadtrip.prepare(
+    `SELECT p.id, p.date, p.taken_at, p.r2_key, p.thumb_key, p.caption, p.lat, p.lon,
+            pe.name AS author
+       FROM photo p LEFT JOIN person pe ON pe.id = p.author_id
+      ORDER BY p.taken_at DESC LIMIT 500`).all();
+  return json({ photos: rows.results });
+}

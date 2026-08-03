@@ -120,14 +120,17 @@ export const SHELL = String.raw`<!DOCTYPE html>
   <section class="screen" id="s-res"></section>
   <section class="screen" id="s-stop"></section>
   <section class="screen" id="s-staying"></section>
+  <section class="screen" id="s-journal"></section>
+  <section class="screen" id="s-photos"></section>
 
   <div class="queued" id="queued"></div>
 
   <nav class="navbar">
     <button class="on" data-tab="today"><span class="ic">&#128205;</span>Today</button>
     <button data-tab="trip"><span class="ic">&#128197;</span>Trip</button>
-    <button data-tab="map"><span class="ic">&#128506;</span>Map</button>
-    <button data-tab="places"><span class="ic">&#9968;</span>Places</button>
+    <button data-tab="journal"><span class="ic">&#9997;</span>Journal</button>
+    <button data-tab="photos"><span class="ic">&#128247;</span>Photos</button>
+    <button data-tab="places"><span class="ic">&#128506;</span>Itinerary</button>
   </nav>
 
 <script>
@@ -393,8 +396,11 @@ function loadTrip(){
     }).join("");
 
     el("s-trip").innerHTML = '<h1>The trip</h1><p class="sub">'+d.days.length+
-      ' day'+(d.days.length===1?"":"s")+' so far</p>' + past +
-      (ahead ? '<h2>Coming up</h2>'+ahead : '');
+      ' day'+(d.days.length===1?"":"s")+' so far</p>' +
+      '<div class="maparea" id="trip-map" style="height:210px;margin-bottom:6px"></div>' +
+      '<p class="tiny" style="margin:0 0 4px">Tap the map to open it full size.</p>' +
+      past + (ahead ? '<h2>Coming up</h2>'+ahead : '');
+    drawMap("trip-map", 210, function(){ show("map"); loadMapScreen(); });
   });
 }
 
@@ -435,11 +441,66 @@ function saveJournal(date){
     .then(function(){ loadDay(date); });
 }
 
+/* One stream: written entries and observation stops, interleaved by time.
+   The capture gestures differ — a thumb at 70mph versus a picnic table at
+   dusk — but what comes out is the same thing and reads as one narrative. */
+function loadJournal(){
+  show("journal");
+  get("/api/journal-feed").then(function(d){
+    var body = d.entries.map(function(e){
+      var tag = e.source === "observation"
+        ? '<span class="badge" style="font-size:11px;padding:3px 9px">' + ICON.observation + ' seen</span>'
+        : '';
+      return '<div class="card"><div class="row"><span class="tiny">' +
+        fmtShort(e.date) + ' &middot; ' + fmtTime(e.written_at) +
+        (e.author ? ' &middot; ' + esc(e.author) : '') + '</span>' + tag + '</div>' +
+        '<p style="margin:8px 0 0;font-size:15px;line-height:1.5">' + esc(e.body) + '</p>' +
+        (e.place ? '<p class="tiny" style="margin:6px 0 0">' + esc(e.place) + '</p>' : '') +
+        '</div>';
+    }).join("");
+
+    el("s-journal").innerHTML = '<h1>Journal</h1><p class="sub">' +
+      (d.entries.length ? d.entries.length + ' entr' + (d.entries.length===1?'y':'ies') +
+        ' &middot; written and seen, together' : 'Nothing written yet') + '</p>' +
+      (ME && ME.role === "author"
+        ? '<div class="card"><textarea id="jf-body" placeholder="What happened today?"></textarea>' +
+          '<button class="ghostbtn" onclick="saveJournalFeed()">Save entry</button></div>' : '') +
+      (body || '<p class="empty">Anything they write, and any observation they log with a note, shows up here.</p>');
+  });
+}
+
+function saveJournalFeed(){
+  var t = el("jf-body"); if(!t || !t.value.trim()) return;
+  send("/api/journal","POST",{ body:t.value, written_at:new Date().toISOString() })
+    .then(function(){ loadJournal(); });
+}
+
+function loadPhotos(){
+  show("photos");
+  get("/api/photos").then(function(d){
+    var grid = d.photos.map(function(p){
+      return '<div class="thumb" style="width:100%;height:112px;border-radius:10px"></div>';
+    }).join("");
+    el("s-photos").innerHTML = '<h1>Photos</h1><p class="sub">' +
+      (d.photos.length ? d.photos.length + ' so far' : 'None yet') + '</p>' +
+      (d.photos.length
+        ? '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">' + grid + '</div>'
+        : '<div class="card"><p style="margin:0;font-size:15px;line-height:1.5">' +
+          'Nothing here yet — the upload path is not built.</p>' +
+          '<p class="tiny" style="margin:9px 0 0">Every photo they have already taken is safe on their phones ' +
+          'with its location and timestamp intact, so nothing is being lost while this waits. ' +
+          'When it is wired up, the whole trip backfills at once.</p></div>');
+  });
+}
+
 function loadPlaces(){
   show("places");
   get("/api/places").then(function(d){
-    el("s-places").innerHTML = '<h1>Places</h1><p class="sub">'+d.places.length+
-      ' on the route</p>' + d.places.map(function(p){
+    var visited = d.places.filter(function(p){ return p.visited; }).length;
+    el("s-places").innerHTML = '<h1>Itinerary</h1><p class="sub">'+d.places.length+
+      ' places &middot; '+visited+' reached so far</p>' +
+      '<p class="tiny" style="margin:-10px 0 14px">Lily\'s plan, in her order. Nothing here is ever late.</p>' +
+      d.places.map(function(p){
       return '<div class="day" onclick="loadPlace(\''+p.id+'\')">' +
         '<div style="flex:1"><div class="row"><b'+(p.visited?'':' style="opacity:.62"')+'>'+esc(p.name)+
         '</b><span class="tiny">'+(p.wanted?p.did+"/"+p.wanted:"")+'</span></div>' +
@@ -504,12 +565,60 @@ function loadRes(id){
 }
 
 var GEO = null;
+
+/* Draws the route into any container. Used inline on Trip and full-size on the
+   map screen; one projection, one code path, no chance of the two disagreeing. */
+function drawMap(containerId, height, onTap){
+  Promise.all([get("/api/map"), geo()]).then(function(res){
+    var d = res[0], arcs = res[1] || [], box = el(containerId);
+    if (!box) return;
+    box.innerHTML = mapSvg(d, arcs, 360, height);
+    if (onTap) { box.style.cursor = "pointer"; box.onclick = onTap; }
+  });
+}
+
+function mapSvg(d, arcs, W, H){
+  var pts = [];
+  (d.tracks||[]).forEach(function(t){ t.forEach(function(c){ pts.push(c); }); });
+  if (d.current) pts.push([d.current.lon, d.current.lat]);
+  if (!pts.length) return '<p class="empty" style="padding:20px">No track yet.</p>';
+
+  var xs = pts.map(function(p){ return p[0]; }), ys = pts.map(function(p){ return p[1]; });
+  var x0=Math.min.apply(null,xs), x1=Math.max.apply(null,xs);
+  var y0=Math.min.apply(null,ys), y1=Math.max.apply(null,ys);
+  var cx=(x0+x1)/2, cy=(y0+y1)/2;
+  var kx = Math.cos(cy*Math.PI/180);
+  var spanX = Math.max((x1-x0)*kx, 0.01), spanY = Math.max(y1-y0, 0.01);
+  var pad = 2.2;
+  var scale = Math.min(W/(spanX*pad), H/(spanY*pad));
+  var px=function(lon){ return W/2 + (lon-cx)*kx*scale; };
+  var py=function(lat){ return H/2 - (lat-cy)*scale; };
+
+  var land = arcs.map(function(a){
+    var dd="";
+    for (var i=0;i<a.length;i++) dd += (i?"L":"M")+px(a[i][0]).toFixed(1)+" "+py(a[i][1]).toFixed(1);
+    return '<path d="'+dd+'" fill="none" stroke="#d3ddd6" stroke-width="1"/>';
+  }).join("");
+  var route = pts.map(function(p,i){ return (i?"L":"M")+px(p[0]).toFixed(1)+" "+py(p[1]).toFixed(1); }).join(" ");
+  var pins = (d.stops||[]).map(function(st){
+    return '<circle cx="'+px(st.lon).toFixed(1)+'" cy="'+py(st.lat).toFixed(1)+
+           '" r="3.5" fill="#c8621f" stroke="#fff" stroke-width="1"/>'; }).join("");
+  var st0 = pts[0];
+  var here = d.current
+    ? '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="10" fill="#1f6f5c" opacity=".22"/>' +
+      '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="5" fill="#1f6f5c" stroke="#fff" stroke-width="1.5"/>' : "";
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:100%">' +
+    '<rect width="'+W+'" height="'+H+'" fill="#f4f7f4"/>' + land +
+    '<path d="'+route+'" fill="none" stroke="#1f6f5c" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>' +
+    '<circle cx="'+px(st0[0]).toFixed(1)+'" cy="'+py(st0[1]).toFixed(1)+'" r="4" fill="#14110e" stroke="#fff" stroke-width="1.5"/>' +
+    pins + here + '</svg>';
+}
 function geo(){
   if (GEO) return Promise.resolve(GEO);
   return get("/geo/states.json").then(function(g){ GEO = g; return g; });
 }
 
-function loadMap(){
+function loadMapScreen(){
   show("map");
   Promise.all([get("/api/map"), geo()]).then(function(res){
     var d = res[0], arcs = res[1] || [];
@@ -577,6 +686,7 @@ function loadMap(){
       pins + here + '</svg>';
 
     el("s-map").innerHTML =
+      '<button class="back" onclick="tab(\'trip\')">&larr;</button>' +
       '<h1>Where they have been</h1><p class="sub">'+d.miles+' miles</p>' +
       '<div class="maparea">'+svg+'</div>' +
       '<p class="tiny" style="margin-top:9px">' +
