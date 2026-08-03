@@ -13,7 +13,8 @@ Costs in the notes are prose ("$20 a night for walk-in site, $26 for regular").
 The numeric column takes the first figure so it can be summed; the original
 phrasing is preserved in `notes` so nothing is flattened away.
 
-Idempotent: clears activity and reservation, then reloads.
+DESTRUCTIVE: truncates activity and reservation, then reloads. Ticked-off
+activities are lost with them. A guard refuses once any exist; --force overrides.
 
 Usage:  python3 scripts/load_extraction.py [--apply]
 """
@@ -89,8 +90,47 @@ def parse_cost(raw):
     return val, residue
 
 
+def refuse_if_user_data(cwd):
+    """
+    The seed/load scripts DELETE and rebuild the itinerary overlay. That is safe
+    only while the overlay is still purely derived from Lily's vault. The moment
+    the girls tick an activity off or the app links a day to a place, those rows
+    are irreplaceable user data sitting in tables these scripts truncate.
+
+    An earlier docstring here claimed re-running "leaves everything the girls
+    have produced untouched." That was false: `DELETE FROM activity` destroys
+    every done flag — which IS the badge system — and `DELETE FROM day_intention`
+    destroys the visited-places record. Refuse rather than warn.
+    """
+    import json as _json, subprocess as _sp
+    probe = ("SELECT (SELECT COUNT(*) FROM activity WHERE done=1) done, "
+             "(SELECT COUNT(*) FROM day_intention) links;")
+    out = _sp.run(
+        ["npx", "--yes", "wrangler@latest", "d1", "execute", "roadtrip",
+         "--remote", "--json", "--command", probe],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    try:
+        txt = out.stdout
+        data, _ = _json.JSONDecoder().raw_decode(txt[txt.index("["):])
+        row = data[0]["results"][0]
+    except Exception:
+        print("WARNING: could not verify database state; refusing to proceed.")
+        print("Run with --force only if you are certain no user data exists.")
+        return True
+    if row["done"] or row["links"]:
+        print(f"REFUSING: {row['done']} ticked-off activities and {row['links']} "
+              f"day-place links exist. This script truncates those tables.")
+        print("That data cannot be re-derived from the vault. Pass --force only "
+              "if you have exported it first.")
+        return True
+    return False
+
+
 def main():
     apply = "--apply" in sys.argv
+    if apply and "--force" not in sys.argv and refuse_if_user_data(WORKER_DIR):
+        sys.exit(1)
     data = json.load(open(EXTRACTION))
 
     # file -> intention_id, from what the seed step recorded

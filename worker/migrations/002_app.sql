@@ -197,8 +197,11 @@ SELECT
   MIN(start_time)             AS first_movement,
   MAX(end_time)               AS last_movement
 FROM trips
--- The Bouncie device moved from Lily's car into Ada's on the morning of
--- 2026-08-02; earlier rows carry odometer ~166k and are a different vehicle.
+-- SUPERSEDED BY 003 AND 005 — do not read this constant as authoritative.
+-- The trip-start boundary lives in trip_meta (created in 003) and is the single
+-- source of truth. This literal survives only so 002 is runnable standalone;
+-- applying 002 without 003+005 gives wrong mileage. Always run every migration
+-- in numeric order.
 WHERE start_time >= '2026-08-02T15:00:00';
 
 CREATE VIEW IF NOT EXISTS v_day_summary AS

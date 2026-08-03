@@ -30,9 +30,11 @@ VALUES (
   || 'morning; everything before this timestamp is a different vehicle and/or '
   || 'pre-departure errands, and is retained but excluded from trip totals.'
 )
-ON CONFLICT(id) DO UPDATE SET
-  trip_start_at = excluded.trip_start_at,
-  departure_date = excluded.departure_date;
+-- DO NOTHING, not DO UPDATE. This migration's literal trip_start_at is the
+-- WRONG one — 004 corrects it. If this re-ran with DO UPDATE it would silently
+-- restore the broken boundary and lose 232 miles again, with both mileage views
+-- still agreeing with each other. Re-running the sequence must be inert here.
+ON CONFLICT(id) DO NOTHING;
 
 DROP VIEW IF EXISTS v_trip_mileage;
 CREATE VIEW v_trip_mileage AS

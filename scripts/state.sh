@@ -14,7 +14,15 @@ for r in d[0]["results"]:
     print("  {:<18}{:>8}{}".format(r["t"], r["n"], flag))
 PY
 
-q () { npx --yes wrangler@latest d1 execute roadtrip --remote --json --command "$1" 2>/dev/null | python3 /tmp/_fmt.py; }
+q () {
+  local out
+  if ! out=$(npx --yes wrangler@latest d1 execute roadtrip --remote --json --command "$1" 2>&1); then
+    echo "  QUERY FAILED — is CLOUDFLARE_API_TOKEN set? See the arc credential." >&2
+    echo "$out" | tail -3 >&2
+    return 1
+  fi
+  printf '%s' "$out" | python3 /tmp/_fmt.py
+}
 
 echo "THE PLAN — seeded from Lily's vault"
 q "SELECT 'intention' t,COUNT(*) n FROM intention UNION ALL SELECT 'activity',COUNT(*) FROM activity UNION ALL SELECT 'reservation',COUNT(*) FROM reservation;"
