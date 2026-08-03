@@ -58,7 +58,8 @@ built and deployed before the data model was settled.
 ```
 worker/          Cloudflare Worker — Bouncie webhook receiver
   src/index.js   Ingest endpoint, auth, event parsing
-  schema.sql     D1 schema
+  migrations/    D1 schema, applied in order
+scripts/         backfill and seed utilities
   wrangler.jsonc Deploy config
 ```
 
@@ -93,7 +94,7 @@ within a day rather than discovered in September.
 export CLOUDFLARE_API_TOKEN=...      # see the arc credential
 export CLOUDFLARE_ACCOUNT_ID=...
 cd worker
-npx wrangler d1 execute roadtrip --remote --file=./schema.sql   # schema changes only
+npx wrangler d1 execute roadtrip --remote --file=./migrations/00N_name.sql   # in order
 npx wrangler deploy
 ```
 
