@@ -18,15 +18,16 @@
     --r:14px;
     --safe-top:env(safe-area-inset-top,0px);
     --safe-bot:env(safe-area-inset-bottom,0px);
+    --nav-h:76px;               /* was 58 — nav targets were too small */
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;padding:0;background:#20262b;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;color:var(--ink)}
 
   /* Desktop review chrome. Invisible on an actual phone. */
   .lab{display:flex;flex-direction:column;align-items:center;padding:22px 12px 60px;gap:14px}
-  .labhead{color:#cfd6dd;font-size:13px;text-align:center;max-width:640px;line-height:1.5}
+  .labhead{color:#cfd6dd;font-size:13px;text-align:center;max-width:660px;line-height:1.5}
   .labhead b{color:#fff}
-  .switch{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:660px}
+  .switch{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:680px}
   .switch button{font:inherit;font-size:12px;padding:7px 12px;border-radius:99px;border:1px solid #3a4450;background:#2a323a;color:#cfd6dd;cursor:pointer}
   .switch button.on{background:#fff;color:#14110e;border-color:#fff;font-weight:600}
   .frame{width:402px;height:874px;background:var(--paper);border-radius:44px;overflow:hidden;position:relative;
@@ -39,7 +40,8 @@
     .island{display:none}
   }
 
-  .screen{display:none;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:calc(52px + var(--safe-top)) 18px calc(112px + var(--safe-bot))}
+  .screen{display:none;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;
+          padding:calc(52px + var(--safe-top)) 18px calc(var(--nav-h) + 58px + var(--safe-bot))}
   .screen.on{display:block}
 
   h1{font-size:27px;line-height:1.15;margin:0 0 3px;letter-spacing:-.5px}
@@ -47,24 +49,32 @@
   .sub{color:var(--ink-2);font-size:14px;margin:0 0 18px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px}
   .card + .card{margin-top:9px}
+  .card.tapme{cursor:pointer;position:relative;padding-right:34px}
+  .card.tapme:active{background:var(--tap)}
+  .card.tapme::after{content:"›";position:absolute;right:15px;top:50%;transform:translateY(-52%);
+                     font-size:25px;color:#c3bab0;line-height:1}
 
   .live{display:inline-flex;align-items:center;gap:6px;background:var(--road-soft);color:var(--road);
         font-size:12px;font-weight:600;padding:5px 10px;border-radius:99px;margin-bottom:12px}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--road);animation:p 2s infinite}
   @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
 
-  .stats{display:flex;gap:22px;margin:16px 0 4px}
-  .stats div span{display:block;font-size:23px;font-weight:640;letter-spacing:-.4px}
-  .stats div small{color:var(--ink-3);font-size:11.5px;text-transform:uppercase;letter-spacing:.6px}
+  /* 2x2 rather than a 4-across row — four numbers across 366px of usable
+     width squeezes both the figure and the label past readable. */
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin:16px 0 4px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 13px}
+  .stat span{display:block;font-size:25px;font-weight:640;letter-spacing:-.5px;line-height:1.1}
+  .stat small{color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+  .stat .qual{color:var(--ink-3);font-size:10.5px;letter-spacing:0;text-transform:none;display:block;margin-top:1px}
 
-  /* Primary action sits LOW. On a 6.3in phone the top third is unreachable
-     one-handed, and this gets pressed while standing at a pump. */
-  .actionbar{position:absolute;left:0;right:0;bottom:0;padding:12px 18px calc(14px + var(--safe-bot));
+  .actionbar{position:absolute;left:0;right:0;bottom:var(--nav-h);padding:12px 18px 14px;
              background:linear-gradient(to top,var(--paper) 62%,rgba(251,249,246,0));z-index:40}
   .bigbtn{display:block;width:100%;border:0;border-radius:16px;background:var(--sun);color:#fff;
           font:inherit;font-size:17.5px;font-weight:660;padding:19px;cursor:pointer;letter-spacing:.1px;
           box-shadow:0 5px 16px rgba(200,98,31,.32)}
   .bigbtn:active{transform:translateY(1px)}
+  .ghostbtn{display:block;width:100%;border:1px solid var(--line);border-radius:14px;background:var(--card);
+            color:var(--ink);font:inherit;font-size:15.5px;font-weight:600;padding:15px;cursor:pointer;margin-top:9px}
 
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .kind{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:17px 12px;
@@ -78,6 +88,10 @@
   .muted{color:var(--ink-2);font-size:13.5px}
   .tiny{color:var(--ink-3);font-size:12px}
   .conf{font-variant-numeric:tabular-nums;font-weight:640}
+  .kv{display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--line);font-size:14.5px}
+  .kv:last-child{border-bottom:0}
+  .kv span:first-child{color:var(--ink-2)}
+  .kv span:last-child{font-weight:600;text-align:right}
 
   ul.check{list-style:none;margin:0;padding:0}
   ul.check li{display:flex;gap:10px;padding:11px 0;border-bottom:1px solid var(--line);font-size:14.5px;line-height:1.35}
@@ -87,7 +101,7 @@
   .box.done::after{content:"";position:absolute;left:6.5px;top:2.5px;width:5px;height:10px;
                    border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg)}
   .done-txt{color:var(--ink-3);text-decoration:line-through}
-  .hers{color:var(--sun);font-size:13px;font-style:italic;margin-top:3px}
+  .hers{color:var(--sun);font-size:13px;font-style:italic;margin-top:3px;display:block}
 
   .day{display:flex;gap:13px;padding:13px 0;border-bottom:1px solid var(--line);cursor:pointer}
   .day:active{background:var(--tap)}
@@ -95,8 +109,7 @@
   .daynum b{display:block;font-size:19px;line-height:1;font-weight:660}
   .daynum small{font-size:10px;color:var(--ink-3);text-transform:uppercase}
   .thumbs{display:flex;gap:6px;margin-top:9px}
-  .thumb{width:56px;height:56px;border-radius:9px;flex:none;
-         background:linear-gradient(135deg,#dfe7e2,#c9d6cf)}
+  .thumb{width:56px;height:56px;border-radius:9px;flex:none;background:linear-gradient(135deg,#dfe7e2,#c9d6cf)}
   .thumb.b{background:linear-gradient(135deg,#f0e2d2,#e0c9ae)}
   .thumb.c{background:linear-gradient(135deg,#dde3ee,#c3cede)}
 
@@ -105,34 +118,37 @@
   .badge{background:var(--road-soft);color:var(--road);border-radius:99px;padding:7px 12px;font-size:12.5px;font-weight:600}
   .badge.off{background:#f1eee9;color:#a49a8e}
 
-  .navbar{position:absolute;left:0;right:0;bottom:0;height:calc(58px + var(--safe-bot));
-          background:rgba(251,249,246,.94);backdrop-filter:blur(12px);border-top:1px solid var(--line);
+  /* Bigger nav: 76px bar, 26px icons, 12px labels. Every target clears 44pt
+     comfortably in both directions. */
+  .navbar{position:absolute;left:0;right:0;bottom:0;height:calc(var(--nav-h) + var(--safe-bot));
+          background:rgba(251,249,246,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line);
           display:flex;z-index:45;padding-bottom:var(--safe-bot)}
-  .navbar button{flex:1;border:0;background:none;font:inherit;font-size:10.5px;color:var(--ink-3);
-                 display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer}
-  .navbar button .ic{font-size:19px}
-  .navbar button.on{color:var(--sun);font-weight:600}
+  .navbar button{flex:1;border:0;background:none;font:inherit;font-size:12px;color:var(--ink-3);
+                 display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+                 cursor:pointer;padding:10px 4px;border-radius:12px;margin:6px 4px}
+  .navbar button .ic{font-size:26px;line-height:1}
+  .navbar button.on{color:var(--sun);font-weight:640;background:var(--sun-soft)}
+  .navbar button:active{background:var(--tap)}
 
-  .back{position:absolute;top:calc(13px + var(--safe-top));left:14px;z-index:50;border:0;background:rgba(255,255,255,.9);
-        border-radius:99px;width:34px;height:34px;font-size:17px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+  .back{position:absolute;top:calc(13px + var(--safe-top));left:14px;z-index:50;border:0;background:rgba(255,255,255,.92);
+        border-radius:99px;width:38px;height:38px;font-size:18px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.1)}
 
-  /* Storyboard overlay — what a press would actually do to the data. */
-  .sb{position:absolute;inset:0;background:rgba(14,17,20,.93);color:#f3efe9;z-index:70;display:none;
+  .sb{position:absolute;inset:0;background:rgba(14,17,20,.94);color:#f3efe9;z-index:70;display:none;
       padding:calc(60px + var(--safe-top)) 22px 30px;overflow-y:auto;font-size:14px;line-height:1.55}
   .sb.on{display:block}
   .sb h3{margin:0 0 4px;font-size:16px;color:#fff}
   .sb .w{border-left:2px solid var(--sun);padding-left:13px;margin:16px 0}
   .sb code{background:#2b3037;padding:2px 6px;border-radius:5px;font-size:12.5px}
   .sbtoggle{position:absolute;top:calc(13px + var(--safe-top));right:14px;z-index:80;border:0;cursor:pointer;
-            background:#14110e;color:#fff;border-radius:99px;padding:8px 13px;font:inherit;font-size:11.5px;font-weight:600}
+            background:#14110e;color:#fff;border-radius:99px;padding:9px 14px;font:inherit;font-size:11.5px;font-weight:600}
 </style>
 </head>
 <body>
 <div class="lab">
   <div class="labhead">
     <b>Roadtrip Adventure — clickable prototype.</b> Built to iPhone 17 Pro (402 × 874).
-    Everything is real data from the database except the photos and the map.
-    Tap <b>What happens</b> on any screen to see what that screen writes.
+    Real data throughout except photos and the map.
+    Tap <b>What happens</b> on any screen to see what it reads and writes.
   </div>
   <div class="switch" id="switch"></div>
 
@@ -147,16 +163,17 @@
       <p class="sub">Monday, August 3 · just south of Madison, Wisconsin</p>
 
       <div class="stats">
-        <div><span>5.9</span><small>miles today</small></div>
-        <div><span>441</span><small>miles total</small></div>
-        <div><span>3</span><small>states</small></div>
+        <div class="stat"><span>5.9</span><small>miles today</small></div>
+        <div class="stat"><span>441</span><small>miles total</small></div>
+        <div class="stat"><span>24.6</span><small>mpg</small><span class="qual">last tank</span></div>
+        <div class="stat"><span>3</span><small>states</small></div>
       </div>
 
       <h2>Tonight</h2>
-      <div class="card">
+      <div class="card tapme" onclick="go('reservation')">
         <div class="row"><b>Schroeder County Park</b><span class="muted">St Cloud, MN</span></div>
         <p class="muted" style="margin:7px 0 0">Check in 2:00 PM · check out 1:00 PM</p>
-        <p class="tiny" style="margin:5px 0 0">Receipt <span class="conf">48198</span> · $46 · paid &amp; split</p>
+        <p class="tiny" style="margin:5px 0 0">Receipt <span class="conf">48198</span> · $46</p>
       </div>
 
       <h2>Still ahead today</h2>
@@ -167,11 +184,43 @@
       <h2>Last stop</h2>
       <div class="card">
         <div class="row"><span>⛽ Gas · Beloit, WI</span><span class="tiny">10:12 AM</span></div>
-        <p class="tiny" style="margin:6px 0 0">11.4 gal · $38.20</p>
+        <p class="tiny" style="margin:6px 0 0">11.4 gal · $38.20 · 24.6 mpg since the last fill</p>
       </div>
 
       <div class="actionbar">
         <button class="bigbtn" onclick="go('stop')">Record a stop</button>
+      </div>
+    </section>
+
+    <!-- ──────────────────── RESERVATION DETAIL (new) ─────────────────── -->
+    <section class="screen" id="reservation">
+      <button class="back" onclick="go('today')">←</button>
+      <h1 style="margin-top:6px">Schroeder County Park</h1>
+      <p class="sub">St Cloud, Minnesota · tonight, Day 2</p>
+
+      <div class="card" style="padding:4px 14px">
+        <div class="kv"><span>Check in</span><span>2:00 PM</span></div>
+        <div class="kv"><span>Check out</span><span>1:00 PM tomorrow</span></div>
+        <div class="kv"><span>Receipt</span><span class="conf">48198</span></div>
+        <div class="kv"><span>Cost</span><span>$46.00</span></div>
+        <div class="kv"><span>Booked</span><span>Yes</span></div>
+      </div>
+
+      <h2>Why she picked it</h2>
+      <div class="card">
+        <p style="margin:0;font-size:14.5px;line-height:1.5" class="hers">“Better place/I deleted the og option:
+          has showers, better ratings, looks prettier, similar price, abt same distance from everything.”</p>
+      </div>
+
+      <h2>Getting there</h2>
+      <div class="card">
+        <div class="row"><span>From here</span><b class="muted">6 hr 15 min</b></div>
+        <p class="tiny" style="margin:6px 0 0">Wright County, MN</p>
+      </div>
+
+      <div class="actionbar">
+        <button class="bigbtn" onclick="alert('Opens Apple Maps')">Directions</button>
+        <button class="ghostbtn" onclick="alert('Opens wrightcountymn.gov')">Booking page</button>
       </div>
     </section>
 
@@ -188,20 +237,20 @@
         <div class="kind" onclick="go('stopdone')"><span class="ic">🎟️</span><span class="lb">Event</span></div>
         <div class="kind" onclick="go('stopdone')"><span class="ic">👀</span><span class="lb">Observation</span></div>
       </div>
-      <p class="tiny" style="margin-top:16px">One tap is enough. Everything below is optional and can wait until tonight.</p>
+      <p class="tiny" style="margin-top:16px">One tap is enough. Everything else is optional and can wait until tonight.</p>
     </section>
 
     <!-- ───────────────────────── STOP RECORDED ───────────────────────── -->
     <section class="screen" id="stopdone">
-      <div style="text-align:center;padding-top:62px">
+      <div style="text-align:center;padding-top:56px">
         <div style="font-size:52px">⛽</div>
         <h1 style="margin-top:14px">Gas stop saved</h1>
         <p class="sub">3:47 PM · near Madison, WI</p>
       </div>
       <h2>Add anything? (optional)</h2>
-      <div class="card"><div class="row"><span class="muted">Gallons</span><span class="tiny">tap to add</span></div></div>
-      <div class="card"><div class="row"><span class="muted">Cost</span><span class="tiny">tap to add</span></div></div>
-      <div class="card"><div class="row"><span class="muted">A note</span><span class="tiny">tap to add</span></div></div>
+      <div class="card tapme"><div class="row"><span class="muted">Gallons</span><span class="tiny">keeps mpg accurate</span></div></div>
+      <div class="card tapme"><div class="row"><span class="muted">Cost</span><span class="tiny">tap to add</span></div></div>
+      <div class="card tapme"><div class="row"><span class="muted">A note</span><span class="tiny">tap to add</span></div></div>
       <div class="actionbar">
         <button class="bigbtn" onclick="go('today')">Done</button>
       </div>
@@ -213,9 +262,10 @@
       <h1 style="margin-top:6px">Day 1</h1>
       <p class="sub">Sunday, August 2 · Garrettsville → Chain O Lakes</p>
       <div class="stats">
-        <div><span>435</span><small>miles</small></div>
-        <div><span>3</span><small>stops</small></div>
-        <div><span>2</span><small>states</small></div>
+        <div class="stat"><span>435</span><small>miles</small></div>
+        <div class="stat"><span>3</span><small>stops</small></div>
+        <div class="stat"><span>26.1</span><small>mpg</small></div>
+        <div class="stat"><span>2</span><small>states</small></div>
       </div>
 
       <h2>Where they went</h2>
@@ -227,9 +277,9 @@
             <circle cx="312" cy="44" r="6" fill="#14110e"/>
             <circle cx="150" cy="84" r="6" fill="#c8621f"/>
             <circle cx="52" cy="112" r="6" fill="#1f6f5c"/>
-            <text x="298" y="32" font-size="10" fill="#57514a">home</text>
+            <text x="296" y="32" font-size="10" fill="#57514a">home</text>
             <text x="132" y="72" font-size="10" fill="#c8621f">Chicago</text>
-            <text x="18" y="132" font-size="10" fill="#1f6f5c">Chain O Lakes</text>
+            <text x="16" y="132" font-size="10" fill="#1f6f5c">Chain O Lakes</text>
           </svg>
         </div>
       </div>
@@ -248,7 +298,7 @@
       <h2>Stops</h2>
       <div class="card"><div class="row"><span>⛽ Gas · Angola, IN</span><span class="tiny">1:20 PM</span></div></div>
       <div class="card"><div class="row"><span>👀 Chicago skyline</span><span class="tiny">5:02 PM</span></div></div>
-      <div class="card"><div class="row"><span>⛺ Chain O Lakes · site 233</span><span class="tiny">7:34 PM</span></div></div>
+      <div class="card tapme" onclick="go('reservation')"><div class="row"><span>⛺ Chain O Lakes · site 233</span><span class="tiny">7:34 PM</span></div></div>
     </section>
 
     <!-- ───────────────────────────── THE TRIP ────────────────────────── -->
@@ -305,9 +355,9 @@
         <p class="tiny" style="padding:9px 0 12px">…and 18 more</p>
       </div>
       <h2>Getting in</h2>
-      <div class="card">
+      <div class="card tapme" onclick="go('reservation')">
         <div class="row"><span>Zion Outfitter — canyoneering boots</span><b>$35</b></div>
-        <p class="tiny" style="margin:6px 0 0">per person · pick up before 10am. Not booked.</p>
+        <p class="tiny" style="margin:6px 0 0">per person · pick up before 10am · not booked</p>
       </div>
     </section>
 
@@ -330,12 +380,12 @@
           <circle cx="168" cy="132" r="6.5" fill="#c8621f"/>
           <circle cx="96" cy="160" r="9" fill="#1f6f5c" opacity=".28"/>
           <circle cx="96" cy="160" r="5.5" fill="#1f6f5c"/>
-          <text x="252" y="86" font-size="11" fill="#57514a">Garrettsville</text>
+          <text x="248" y="86" font-size="11" fill="#57514a">Garrettsville</text>
           <text x="150" y="122" font-size="11" fill="#c8621f">Chicago</text>
-          <text x="46" y="182" font-size="11" fill="#1f6f5c">they are here</text>
+          <text x="44" y="182" font-size="11" fill="#1f6f5c">they are here</text>
         </svg>
       </div>
-      <p class="tiny" style="margin-top:9px">Placeholder. The real map draws the Bouncie polylines — 1,300+ points and climbing.</p>
+      <p class="tiny" style="margin-top:9px">Placeholder. The real map draws the Bouncie polylines — 2,400+ points and climbing.</p>
 
       <h2>Badges</h2>
       <div class="badges">
@@ -348,10 +398,7 @@
       <p class="tiny" style="margin-top:10px">States and miles fill themselves in from the tracker. Nobody taps anything.</p>
     </section>
 
-    <!-- ─────────────────────── STORYBOARD OVERLAY ───────────────────── -->
-    <div class="sb" id="sb">
-      <div id="sbbody"></div>
-    </div>
+    <div class="sb" id="sb"><div id="sbbody"></div></div>
 
     <nav class="navbar">
       <button class="on" data-go="today"><span class="ic">📍</span>Today</button>
@@ -364,36 +411,42 @@
 
 <script>
 const SCREENS = {
-  today:'Today', stop:'Record a stop', stopdone:'Stop saved',
+  today:'Today', reservation:'Tonight (detail)', stop:'Record a stop', stopdone:'Stop saved',
   day:'The day', trip:'The trip', place:'A place', map:'Map'
 };
 
 const STORY = {
-  today:`<h3>Today</h3><p>Read-only. This is what Lily and Ada open by default.</p>
-    <div class="w"><b>Position and speed</b><br>Latest <code>track_points</code> row from the Bouncie webhook. No polling by the phone.</div>
-    <div class="w"><b>Miles</b><br><code>v_day_summary</code> for today, <code>v_trip_mileage</code> for the total. Local date, not UTC.</div>
-    <div class="w"><b>Tonight</b><br>Next <code>reservation</code> by <code>check_in_at</code>. If one had a cancellation deadline coming, it would say so here.</div>`,
+  today:`<h3>Today</h3><p>Read-only. What Lily and Ada open by default.</p>
+    <div class="w"><b>Position and speed</b><br>Latest <code>track_points</code> row from the Bouncie webhook. The phone polls nothing.</div>
+    <div class="w"><b>MPG — this one needs explaining</b><br>Bouncie reports <code>fuel_consumed</code> as <b>0</b> for this car; it is useless. So mpg is derived two ways.
+      Preferred: tank-to-tank — gallons entered at a fill-up, divided into the miles since the previous fill. That is why the gallons field on a gas stop earns its place.
+      Fallback when a fill has no gallons: the <code>fuel_level</code> percentage drop from the webhook (221 points carrying it so far, 43–100%) against the Golf's tank capacity. Noisier, but free. The label says which was used.</div>
+    <div class="w"><b>Tonight</b><br>Next <code>reservation</code> by <code>check_in_at</code>. Tapping opens the detail screen. A cancellation deadline coming up would surface here.</div>`,
+  reservation:`<h3>Tonight — detail</h3><p>The screen you want at 8pm pulling into a campground in the dark.</p>
+    <div class="w"><b>Reads</b><br>One <code>reservation</code> row: times, confirmation, cost, and Lily's own note about why she chose it over the alternative.</div>
+    <div class="w"><b>Deliberately absent</b><br>No paid/split tracking. The column still holds what Cost.md recorded, but it is not something anyone needs to look at on the road.</div>
+    <div class="w"><b>Directions</b><br>Hands off to Apple Maps rather than building a routing UI.</div>`,
   stop:`<h3>Record a stop</h3><p>The only thing they touch while driving. One tap is the whole interaction.</p>
-    <div class="w"><b>On tap</b><br>Writes a <code>stop</code> row: kind, <code>occurred_at</code>, lat/lon from the browser, <code>tz_offset</code>, author. Nothing else is required.</div>
-    <div class="w"><b>Offline</b><br>Queued in IndexedDB and sent when signal returns. The screen says saved either way — it is saved, locally.</div>
-    <div class="w"><b>Why it matters</b><br>A gas stop becomes a fuel record. A campsite becomes the day's anchor. An observation is a micro journal entry. One button, three features.</div>`,
-  stopdone:`<h3>Stop saved</h3><p>Confirmation is instant and the extras are genuinely optional.</p>
-    <div class="w"><b>Deliberate</b><br>No required fields. Anything asked for at a pump in 100° heat is a field that stops getting filled by week two.</div>
-    <div class="w"><b>Later</b><br>Gallons, cost and notes can be added that night from the day screen.</div>`,
+    <div class="w"><b>On tap</b><br>Writes a <code>stop</code> row: kind, <code>occurred_at</code>, lat/lon from the browser, <code>tz_offset</code>, author. Nothing else required.</div>
+    <div class="w"><b>Offline</b><br>Queued in IndexedDB, sent when signal returns. The screen says saved either way — because it is, locally.</div>
+    <div class="w"><b>Why it matters</b><br>A gas stop becomes a fuel record and feeds mpg. A campsite anchors the day. An observation is a micro journal entry. One button, three features.</div>`,
+  stopdone:`<h3>Stop saved</h3><p>Confirmation is instant; the extras are genuinely optional.</p>
+    <div class="w"><b>Deliberate</b><br>No required fields. Anything demanded at a pump in 100° heat stops getting filled by week two.</div>
+    <div class="w"><b>Gallons is the one worth nudging</b><br>It is the difference between real mpg and an estimate — hence the hint rather than a bare label.</div>`,
   day:`<h3>The day</h3><p>The spine made visible. Everything that happened on one local date.</p>
     <div class="w"><b>Assembled from</b><br><code>v_day_summary</code> plus that date's <code>stop</code>, <code>photo</code> and <code>journal_entry</code> rows.</div>
-    <div class="w"><b>The track</b><br>Bouncie polyline for segments starting that local day.</div>
-    <div class="w"><b>Journal</b><br>Typed here or lifted from the iMessage thread, attributed either way. The share flag is per entry.</div>`,
+    <div class="w"><b>The track</b><br>Bouncie polyline for segments starting that local day. Aug 2 has route shape but no timestamps — the webhook only started on the 3rd.</div>
+    <div class="w"><b>Journal</b><br>Typed here or lifted from the iMessage thread, attributed either way. Share flag is per entry.</div>`,
   trip:`<h3>The trip</h3><p>The parents' home screen. Newest day first, then what is coming.</p>
-    <div class="w"><b>Past days</b><br><code>day</code> joined to <code>v_day_summary</code>. Empty days stay in the list rather than disappearing.</div>
-    <div class="w"><b>Coming up</b><br><code>intention</code> rows by <code>seq</code>, shown faded. These are hopes, not commitments — nothing is ever marked late or missed.</div>`,
+    <div class="w"><b>Past days</b><br><code>day</code> joined to <code>v_day_summary</code>. Empty days stay in the list rather than vanishing.</div>
+    <div class="w"><b>Coming up</b><br><code>intention</code> rows by <code>seq</code>, faded. These are hopes, not commitments — nothing is ever marked late or missed.</div>`,
   place:`<h3>A place</h3><p>One intention and everything Lily wrote about it.</p>
     <div class="w"><b>The checklist</b><br><code>activity</code> rows. Ticking one sets <code>done</code> and <code>done_date</code> — that is the entire attractions badge system.</div>
     <div class="w"><b>Her voice</b><br>The italic lines are verbatim from her vault and never get cleaned up. That is the point of the archive.</div>
-    <div class="w"><b>If they skip it</b><br>Nothing happens. No days attach, and it stays here unvisited.</div>`,
-  map:`<h3>Map</h3><p>Route so far, and the badges that earn themselves.</p>
-    <div class="w"><b>The line</b><br>Bouncie polylines for in-trip segments. Aug 2 has route shape but no timestamps — the webhook only started today.</div>
-    <div class="w"><b>Badges</b><br>States and miles are computed from the track. Nobody taps anything; they appear while the car is moving.</div>`
+    <div class="w"><b>If they skip it</b><br>Nothing happens. No days attach and it sits here unvisited.</div>`,
+  map:`<h3>Map</h3><p>Route so far, and badges that earn themselves.</p>
+    <div class="w"><b>The line</b><br>Bouncie polylines for in-trip segments only — everything before the device moved into Ada's car is excluded by <code>trip_meta</code>.</div>
+    <div class="w"><b>Badges</b><br>States and miles computed from the track. Nobody taps anything; they appear while the car is moving.</div>`
 };
 
 function go(id){
@@ -401,7 +454,7 @@ function go(id){
   document.querySelectorAll('#switch button').forEach(b=>b.classList.toggle('on', b.dataset.go===id));
   document.querySelectorAll('.navbar button').forEach(b=>b.classList.toggle('on', b.dataset.go===id));
   document.getElementById('sbbody').innerHTML = STORY[id] || '';
-  document.querySelector('.screen.on').scrollTop = 0;
+  const on=document.querySelector('.screen.on'); if(on) on.scrollTop=0;
 }
 function toggleSb(){ document.getElementById('sb').classList.toggle('on'); }
 
