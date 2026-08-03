@@ -417,3 +417,13 @@ export async function photos(env) {
       ORDER BY p.taken_at DESC LIMIT 500`).all();
   return json({ photos: rows.results });
 }
+
+/** Remove a journal entry. Same reasoning as discarding a stop: things get
+    written by accident, and the only alternative was asking Andy to delete
+    them by hand, which he had to do twice. */
+export async function deleteJournal(env, person, body) {
+  if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
+  if (!body.id) return json({ error: "id required" }, 400);
+  await env.roadtrip.prepare(`DELETE FROM journal_entry WHERE id = ?`).bind(body.id).run();
+  return json({ ok: true });
+}

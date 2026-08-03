@@ -172,6 +172,38 @@ function flush(){
 }
 window.addEventListener("online", flush);
 
+/* Delete is two taps, not a browser confirm(): a modal dialog blocks the page,
+   reads as an error, and on iOS looks like the site has crashed. The first tap
+   arms, the second commits, and anything else disarms it. */
+var ARMED = null;
+function armDelete(kind, id, ev){
+  if (ev) ev.stopPropagation();
+  if (ARMED === kind + ":" + id) { doDelete(kind, id); return; }
+  ARMED = kind + ":" + id;
+  var b = el("del-" + id);
+  if (b) { b.textContent = "Delete?"; b.style.color = "#a8332a"; b.style.fontWeight = "700"; }
+  setTimeout(function(){
+    if (ARMED === kind + ":" + id) {
+      ARMED = null;
+      var bb = el("del-" + id);
+      if (bb) { bb.textContent = "Delete"; bb.style.color = ""; bb.style.fontWeight = ""; }
+    }
+  }, 4000);
+}
+function doDelete(kind, id){
+  ARMED = null;
+  var url = kind === "journal" ? "/api/journal" : "/api/stop";
+  send(url, "DELETE", { id: id }).then(function(){
+    if (kind === "journal" || kind === "observation") loadJournal(); else tab("today");
+  });
+}
+function delBtn(kind, id){
+  if (!ME || ME.role !== "author") return "";
+  return '<button id="del-' + id + '" onclick="armDelete(\'' + kind + '\',\'' + id +
+    '\',event)" style="border:0;background:none;font:inherit;font-size:12px;' +
+    'color:#a49a8e;cursor:pointer;padding:4px 0">Delete</button>';
+}
+
 /* --- Screens ------------------------------------------------------------- */
 function show(id){
   var all=document.querySelectorAll(".screen");
@@ -415,7 +447,8 @@ function loadDay(date){
     }).join("") || '<p class="empty">No stops recorded.</p>';
     var journal = d.journal.map(function(j){
       return '<div class="card"><p style="margin:0;font-size:15px;line-height:1.5">'+esc(j.body)+
-        '</p><p class="tiny" style="margin:9px 0 0">'+esc(j.author||"")+' &middot; '+fmtTime(j.written_at)+'</p></div>';
+        '</p><div class="row" style="margin-top:9px"><span class="tiny">'+esc(j.author||"")+
+        ' &middot; '+fmtTime(j.written_at)+'</span>'+delBtn("journal", j.id)+'</div></div>';
     }).join("");
     el("s-day").innerHTML =
       '<button class="back" onclick="tab(\'trip\')">&larr;</button>' +
@@ -456,6 +489,8 @@ function loadJournal(){
         (e.author ? ' &middot; ' + esc(e.author) : '') + '</span>' + tag + '</div>' +
         '<p style="margin:8px 0 0;font-size:15px;line-height:1.5">' + esc(e.body) + '</p>' +
         (e.place ? '<p class="tiny" style="margin:6px 0 0">' + esc(e.place) + '</p>' : '') +
+        '<div style="text-align:right;margin-top:2px">' +
+          delBtn(e.source === "observation" ? "observation" : "journal", e.id) + '</div>' +
         '</div>';
     }).join("");
 
@@ -688,12 +723,102 @@ function loadMapScreen(){
     el("s-map").innerHTML =
       '<button class="back" onclick="tab(\'trip\')">&larr;</button>' +
       '<h1>Where they have been</h1><p class="sub">'+d.miles+' miles</p>' +
-      '<div class="maparea">'+svg+'</div>' +
+      '<div class="maparea" id="bigmap" style="height:60vh;touch-action:none">'+svg+'</div>' +
+      '<div class="row" style="margin-top:8px;gap:8px">' +
+        '<button class="ghostbtn" style="margin:0;flex:1" onclick="zoomBy(1/1.6)">&minus;</button>' +
+        '<button class="ghostbtn" style="margin:0;flex:1" onclick="zoomBy(1.6)">+</button>' +
+        '<button class="ghostbtn" style="margin:0;flex:2" onclick="zoomReset()">Fit</button>' +
+      '</div>' +
       '<p class="tiny" style="margin-top:9px">' +
         '<span style="color:#14110e">&#9679;</span> home &middot; ' +
         '<span style="color:#c8621f">&#9679;</span> stops &middot; ' +
-        '<span style="color:#1f6f5c">&#9679;</span> where they are now</p>';
+        '<span style="color:#1f6f5c">&#9679;</span> where they are now' +
+        ' &mdash; pinch to zoom, drag to pan, double-tap to fit</p>';
+    attachZoom();
   });
+}
+
+/* Pinch, drag and double-tap on the map.
+   Implemented by moving the SVG viewBox rather than a CSS transform, so the
+   route and the state outlines stay crisp at any zoom instead of turning into
+   a blurry upscaled bitmap — the whole reason this is vector in the first
+   place. touch-action:none on the container stops Safari hijacking the gesture
+   to scroll the page. */
+var VB0 = null, VB = null;
+function svgEl(){ var b = el("bigmap"); return b && b.querySelector("svg"); }
+function applyVB(){
+  var sv = svgEl(); if (!sv || !VB) return;
+  sv.setAttribute("viewBox", VB.x.toFixed(2)+" "+VB.y.toFixed(2)+" "+VB.w.toFixed(2)+" "+VB.h.toFixed(2));
+}
+function zoomAt(factor, cx, cy){
+  if (!VB) return;
+  var nw = VB.w / factor, nh = VB.h / factor;
+  // Clamp: 12x in, and never further out than the original fit.
+  if (nw < VB0.w/12 || nw > VB0.w) return;
+  VB = { x: cx - (cx - VB.x) * (nw/VB.w), y: cy - (cy - VB.y) * (nh/VB.h), w: nw, h: nh };
+  applyVB();
+}
+function zoomBy(f){ if (VB) zoomAt(f, VB.x + VB.w/2, VB.y + VB.h/2); }
+function zoomReset(){ if (VB0) { VB = Object.assign({}, VB0); applyVB(); } }
+
+function attachZoom(){
+  var box = el("bigmap"), sv = svgEl();
+  if (!box || !sv) return;
+  var parts = (sv.getAttribute("viewBox")||"0 0 360 340").split(/\s+/).map(Number);
+  VB0 = { x:parts[0], y:parts[1], w:parts[2], h:parts[3] };
+  VB = Object.assign({}, VB0);
+
+  function toSvg(clientX, clientY){
+    var r = box.getBoundingClientRect();
+    return { x: VB.x + (clientX - r.left)/r.width * VB.w,
+             y: VB.y + (clientY - r.top)/r.height * VB.h };
+  }
+
+  var pts = {}, lastDist = null, lastMid = null, dragFrom = null, lastTap = 0;
+
+  box.addEventListener("pointerdown", function(e){
+    box.setPointerCapture(e.pointerId);
+    pts[e.pointerId] = { x:e.clientX, y:e.clientY };
+    var n = Object.keys(pts).length;
+    if (n === 1) {
+      dragFrom = toSvg(e.clientX, e.clientY);
+      var now = Date.now();
+      if (now - lastTap < 300) zoomReset();
+      lastTap = now;
+    } else { dragFrom = null; }
+  });
+
+  box.addEventListener("pointermove", function(e){
+    if (!pts[e.pointerId]) return;
+    pts[e.pointerId] = { x:e.clientX, y:e.clientY };
+    var ids = Object.keys(pts);
+    if (ids.length >= 2) {
+      var a = pts[ids[0]], b = pts[ids[1]];
+      var dist = Math.hypot(a.x-b.x, a.y-b.y);
+      var mid = toSvg((a.x+b.x)/2, (a.y+b.y)/2);
+      if (lastDist) zoomAt(dist/lastDist, mid.x, mid.y);
+      lastDist = dist; lastMid = mid;
+    } else if (dragFrom) {
+      var p = toSvg(e.clientX, e.clientY);
+      VB.x -= (p.x - dragFrom.x); VB.y -= (p.y - dragFrom.y);
+      applyVB();
+    }
+  });
+
+  function up(e){
+    delete pts[e.pointerId];
+    if (Object.keys(pts).length < 2) lastDist = null;
+    if (Object.keys(pts).length === 0) dragFrom = null;
+  }
+  box.addEventListener("pointerup", up);
+  box.addEventListener("pointercancel", up);
+
+  // Desktop wheel, for reviewing it on a laptop.
+  box.addEventListener("wheel", function(e){
+    e.preventDefault();
+    var p = toSvg(e.clientX, e.clientY);
+    zoomAt(e.deltaY < 0 ? 1.15 : 1/1.15, p.x, p.y);
+  }, { passive:false });
 }
 
 /* --- boot ---------------------------------------------------------------- */

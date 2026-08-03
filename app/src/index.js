@@ -85,7 +85,10 @@ export default {
           return request.method === "PATCH"
             ? api.updateStop(env, person, body)
             : api.createStop(env, person, body);
-        case "/api/journal":     return api.createJournal(env, person, body);
+        case "/api/journal":
+          return request.method === "DELETE"
+            ? api.deleteJournal(env, person, body)
+            : api.createJournal(env, person, body);
         case "/api/activity":    return api.toggleActivity(env, person, body);
         case "/api/visit":       return api.linkDayPlace(env, person, body);
         default:                 return json({ error: "not found" }, 404);
