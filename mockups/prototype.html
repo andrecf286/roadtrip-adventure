@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Roadtrip Adventure — prototype</title>
+<style>
+  /* Built to iPhone 17 Pro: 402 x 874 CSS px, DPR 3.
+     Light, high-contrast on purpose — this gets used outdoors in sun, where
+     dark mode goes unreadable behind glare. */
+  :root{
+    --ink:#14110e; --ink-2:#57514a; --ink-3:#8b837a;
+    --paper:#fbf9f6; --card:#fff; --line:#e6e0d8;
+    --road:#1f6f5c; --road-soft:#e7f2ee;
+    --sun:#c8621f; --sun-soft:#fdefe3;
+    --tap:#f2ede6;
+    --r:14px;
+    --safe-top:env(safe-area-inset-top,0px);
+    --safe-bot:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;background:#20262b;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;color:var(--ink)}
+
+  /* Desktop review chrome. Invisible on an actual phone. */
+  .lab{display:flex;flex-direction:column;align-items:center;padding:22px 12px 60px;gap:14px}
+  .labhead{color:#cfd6dd;font-size:13px;text-align:center;max-width:640px;line-height:1.5}
+  .labhead b{color:#fff}
+  .switch{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:660px}
+  .switch button{font:inherit;font-size:12px;padding:7px 12px;border-radius:99px;border:1px solid #3a4450;background:#2a323a;color:#cfd6dd;cursor:pointer}
+  .switch button.on{background:#fff;color:#14110e;border-color:#fff;font-weight:600}
+  .frame{width:402px;height:874px;background:var(--paper);border-radius:44px;overflow:hidden;position:relative;
+         box-shadow:0 0 0 11px #0d1114,0 0 0 13px #333c45,0 26px 60px rgba(0,0,0,.55);flex:none}
+  .island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:118px;height:33px;background:#000;border-radius:20px;z-index:60}
+  @media (max-width:700px){
+    .lab{padding:0;gap:0}
+    .labhead,.switch{display:none}
+    .frame{width:100vw;height:100dvh;border-radius:0;box-shadow:none}
+    .island{display:none}
+  }
+
+  .screen{display:none;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:calc(52px + var(--safe-top)) 18px calc(112px + var(--safe-bot))}
+  .screen.on{display:block}
+
+  h1{font-size:27px;line-height:1.15;margin:0 0 3px;letter-spacing:-.5px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.9px;color:var(--ink-3);margin:24px 0 9px;font-weight:600}
+  .sub{color:var(--ink-2);font-size:14px;margin:0 0 18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+  .card + .card{margin-top:9px}
+
+  .live{display:inline-flex;align-items:center;gap:6px;background:var(--road-soft);color:var(--road);
+        font-size:12px;font-weight:600;padding:5px 10px;border-radius:99px;margin-bottom:12px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--road);animation:p 2s infinite}
+  @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
+
+  .stats{display:flex;gap:22px;margin:16px 0 4px}
+  .stats div span{display:block;font-size:23px;font-weight:640;letter-spacing:-.4px}
+  .stats div small{color:var(--ink-3);font-size:11.5px;text-transform:uppercase;letter-spacing:.6px}
+
+  /* Primary action sits LOW. On a 6.3in phone the top third is unreachable
+     one-handed, and this gets pressed while standing at a pump. */
+  .actionbar{position:absolute;left:0;right:0;bottom:0;padding:12px 18px calc(14px + var(--safe-bot));
+             background:linear-gradient(to top,var(--paper) 62%,rgba(251,249,246,0));z-index:40}
+  .bigbtn{display:block;width:100%;border:0;border-radius:16px;background:var(--sun);color:#fff;
+          font:inherit;font-size:17.5px;font-weight:660;padding:19px;cursor:pointer;letter-spacing:.1px;
+          box-shadow:0 5px 16px rgba(200,98,31,.32)}
+  .bigbtn:active{transform:translateY(1px)}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .kind{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:17px 12px;
+        text-align:center;cursor:pointer;min-height:96px;display:flex;flex-direction:column;
+        align-items:center;justify-content:center;gap:7px}
+  .kind:active{background:var(--tap)}
+  .kind .ic{font-size:26px;line-height:1}
+  .kind .lb{font-size:14.5px;font-weight:600}
+
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .muted{color:var(--ink-2);font-size:13.5px}
+  .tiny{color:var(--ink-3);font-size:12px}
+  .conf{font-variant-numeric:tabular-nums;font-weight:640}
+
+  ul.check{list-style:none;margin:0;padding:0}
+  ul.check li{display:flex;gap:10px;padding:11px 0;border-bottom:1px solid var(--line);font-size:14.5px;line-height:1.35}
+  ul.check li:last-child{border-bottom:0}
+  .box{width:21px;height:21px;border-radius:6px;border:1.5px solid #cbc3b8;flex:none;margin-top:1px}
+  .box.done{background:var(--road);border-color:var(--road);position:relative}
+  .box.done::after{content:"";position:absolute;left:6.5px;top:2.5px;width:5px;height:10px;
+                   border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg)}
+  .done-txt{color:var(--ink-3);text-decoration:line-through}
+  .hers{color:var(--sun);font-size:13px;font-style:italic;margin-top:3px}
+
+  .day{display:flex;gap:13px;padding:13px 0;border-bottom:1px solid var(--line);cursor:pointer}
+  .day:active{background:var(--tap)}
+  .daynum{width:38px;flex:none;text-align:center}
+  .daynum b{display:block;font-size:19px;line-height:1;font-weight:660}
+  .daynum small{font-size:10px;color:var(--ink-3);text-transform:uppercase}
+  .thumbs{display:flex;gap:6px;margin-top:9px}
+  .thumb{width:56px;height:56px;border-radius:9px;flex:none;
+         background:linear-gradient(135deg,#dfe7e2,#c9d6cf)}
+  .thumb.b{background:linear-gradient(135deg,#f0e2d2,#e0c9ae)}
+  .thumb.c{background:linear-gradient(135deg,#dde3ee,#c3cede)}
+
+  .maparea{position:relative;height:330px;border-radius:var(--r);overflow:hidden;border:1px solid var(--line);background:#eef1ec}
+  .badges{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+  .badge{background:var(--road-soft);color:var(--road);border-radius:99px;padding:7px 12px;font-size:12.5px;font-weight:600}
+  .badge.off{background:#f1eee9;color:#a49a8e}
+
+  .navbar{position:absolute;left:0;right:0;bottom:0;height:calc(58px + var(--safe-bot));
+          background:rgba(251,249,246,.94);backdrop-filter:blur(12px);border-top:1px solid var(--line);
+          display:flex;z-index:45;padding-bottom:var(--safe-bot)}
+  .navbar button{flex:1;border:0;background:none;font:inherit;font-size:10.5px;color:var(--ink-3);
+                 display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer}
+  .navbar button .ic{font-size:19px}
+  .navbar button.on{color:var(--sun);font-weight:600}
+
+  .back{position:absolute;top:calc(13px + var(--safe-top));left:14px;z-index:50;border:0;background:rgba(255,255,255,.9);
+        border-radius:99px;width:34px;height:34px;font-size:17px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+
+  /* Storyboard overlay — what a press would actually do to the data. */
+  .sb{position:absolute;inset:0;background:rgba(14,17,20,.93);color:#f3efe9;z-index:70;display:none;
+      padding:calc(60px + var(--safe-top)) 22px 30px;overflow-y:auto;font-size:14px;line-height:1.55}
+  .sb.on{display:block}
+  .sb h3{margin:0 0 4px;font-size:16px;color:#fff}
+  .sb .w{border-left:2px solid var(--sun);padding-left:13px;margin:16px 0}
+  .sb code{background:#2b3037;padding:2px 6px;border-radius:5px;font-size:12.5px}
+  .sbtoggle{position:absolute;top:calc(13px + var(--safe-top));right:14px;z-index:80;border:0;cursor:pointer;
+            background:#14110e;color:#fff;border-radius:99px;padding:8px 13px;font:inherit;font-size:11.5px;font-weight:600}
+</style>
+</head>
+<body>
+<div class="lab">
+  <div class="labhead">
+    <b>Roadtrip Adventure — clickable prototype.</b> Built to iPhone 17 Pro (402 × 874).
+    Everything is real data from the database except the photos and the map.
+    Tap <b>What happens</b> on any screen to see what that screen writes.
+  </div>
+  <div class="switch" id="switch"></div>
+
+  <div class="frame">
+    <div class="island"></div>
+    <button class="sbtoggle" onclick="toggleSb()">What happens</button>
+
+    <!-- ───────────────────────────── TODAY ───────────────────────────── -->
+    <section class="screen on" id="today">
+      <div class="live"><span class="dot"></span> Moving · 77 mph</div>
+      <h1>Day 2</h1>
+      <p class="sub">Monday, August 3 · just south of Madison, Wisconsin</p>
+
+      <div class="stats">
+        <div><span>5.9</span><small>miles today</small></div>
+        <div><span>441</span><small>miles total</small></div>
+        <div><span>3</span><small>states</small></div>
+      </div>
+
+      <h2>Tonight</h2>
+      <div class="card">
+        <div class="row"><b>Schroeder County Park</b><span class="muted">St Cloud, MN</span></div>
+        <p class="muted" style="margin:7px 0 0">Check in 2:00 PM · check out 1:00 PM</p>
+        <p class="tiny" style="margin:5px 0 0">Receipt <span class="conf">48198</span> · $46 · paid &amp; split</p>
+      </div>
+
+      <h2>Still ahead today</h2>
+      <div class="card">
+        <div class="row"><span>Drive to St Cloud</span><b class="muted">6 hr 15 min</b></div>
+      </div>
+
+      <h2>Last stop</h2>
+      <div class="card">
+        <div class="row"><span>⛽ Gas · Beloit, WI</span><span class="tiny">10:12 AM</span></div>
+        <p class="tiny" style="margin:6px 0 0">11.4 gal · $38.20</p>
+      </div>
+
+      <div class="actionbar">
+        <button class="bigbtn" onclick="go('stop')">Record a stop</button>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────── RECORD A STOP ─────────────────────── -->
+    <section class="screen" id="stop">
+      <button class="back" onclick="go('today')">←</button>
+      <h1 style="margin-top:6px">What kind of stop?</h1>
+      <p class="sub">3:47 PM · near Madison, WI — recorded automatically</p>
+      <div class="grid">
+        <div class="kind" onclick="go('stopdone')"><span class="ic">⛽</span><span class="lb">Gas</span></div>
+        <div class="kind" onclick="go('stopdone')"><span class="ic">🍔</span><span class="lb">Food</span></div>
+        <div class="kind" onclick="go('stopdone')"><span class="ic">⛺</span><span class="lb">Campsite</span></div>
+        <div class="kind" onclick="go('stopdone')"><span class="ic">🛏️</span><span class="lb">Lodging</span></div>
+        <div class="kind" onclick="go('stopdone')"><span class="ic">🎟️</span><span class="lb">Event</span></div>
+        <div class="kind" onclick="go('stopdone')"><span class="ic">👀</span><span class="lb">Observation</span></div>
+      </div>
+      <p class="tiny" style="margin-top:16px">One tap is enough. Everything below is optional and can wait until tonight.</p>
+    </section>
+
+    <!-- ───────────────────────── STOP RECORDED ───────────────────────── -->
+    <section class="screen" id="stopdone">
+      <div style="text-align:center;padding-top:62px">
+        <div style="font-size:52px">⛽</div>
+        <h1 style="margin-top:14px">Gas stop saved</h1>
+        <p class="sub">3:47 PM · near Madison, WI</p>
+      </div>
+      <h2>Add anything? (optional)</h2>
+      <div class="card"><div class="row"><span class="muted">Gallons</span><span class="tiny">tap to add</span></div></div>
+      <div class="card"><div class="row"><span class="muted">Cost</span><span class="tiny">tap to add</span></div></div>
+      <div class="card"><div class="row"><span class="muted">A note</span><span class="tiny">tap to add</span></div></div>
+      <div class="actionbar">
+        <button class="bigbtn" onclick="go('today')">Done</button>
+      </div>
+    </section>
+
+    <!-- ───────────────────────────── THE DAY ─────────────────────────── -->
+    <section class="screen" id="day">
+      <button class="back" onclick="go('trip')">←</button>
+      <h1 style="margin-top:6px">Day 1</h1>
+      <p class="sub">Sunday, August 2 · Garrettsville → Chain O Lakes</p>
+      <div class="stats">
+        <div><span>435</span><small>miles</small></div>
+        <div><span>3</span><small>stops</small></div>
+        <div><span>2</span><small>states</small></div>
+      </div>
+
+      <h2>Where they went</h2>
+      <div class="card">
+        <div class="maparea" style="height:150px">
+          <svg viewBox="0 0 360 150" style="width:100%;height:100%">
+            <rect width="360" height="150" fill="#eef1ec"/>
+            <path d="M312 44 C250 60, 190 74, 120 92 C96 98, 74 104, 52 112" fill="none" stroke="#1f6f5c" stroke-width="3.5" stroke-linecap="round"/>
+            <circle cx="312" cy="44" r="6" fill="#14110e"/>
+            <circle cx="150" cy="84" r="6" fill="#c8621f"/>
+            <circle cx="52" cy="112" r="6" fill="#1f6f5c"/>
+            <text x="298" y="32" font-size="10" fill="#57514a">home</text>
+            <text x="132" y="72" font-size="10" fill="#c8621f">Chicago</text>
+            <text x="18" y="132" font-size="10" fill="#1f6f5c">Chain O Lakes</text>
+          </svg>
+        </div>
+      </div>
+
+      <h2>Journal</h2>
+      <div class="card">
+        <p style="margin:0;font-size:15px;line-height:1.5">Left later than we meant to. Ada drove the first four hours
+          and I did not wake up once. Stopped in Chicago for like an hour and a half — we
+          did not make it to the Obama library, next time. Set up the tent in the dark.</p>
+        <p class="tiny" style="margin:9px 0 0">Lily · 11:40 PM</p>
+      </div>
+
+      <h2>Photos · 14</h2>
+      <div class="thumbs"><div class="thumb"></div><div class="thumb b"></div><div class="thumb c"></div><div class="thumb"></div><div class="thumb b"></div></div>
+
+      <h2>Stops</h2>
+      <div class="card"><div class="row"><span>⛽ Gas · Angola, IN</span><span class="tiny">1:20 PM</span></div></div>
+      <div class="card"><div class="row"><span>👀 Chicago skyline</span><span class="tiny">5:02 PM</span></div></div>
+      <div class="card"><div class="row"><span>⛺ Chain O Lakes · site 233</span><span class="tiny">7:34 PM</span></div></div>
+    </section>
+
+    <!-- ───────────────────────────── THE TRIP ────────────────────────── -->
+    <section class="screen" id="trip">
+      <h1>The trip</h1>
+      <p class="sub">Day 2 of about 42 · 441 miles so far</p>
+      <div class="day" onclick="go('day')">
+        <div class="daynum"><b>2</b><small>Aug 3</small></div>
+        <div style="flex:1">
+          <div class="row"><b>On the road</b><span class="tiny">5.9 mi</span></div>
+          <p class="tiny" style="margin:3px 0 0">Wisconsin · heading for St Cloud</p>
+        </div>
+      </div>
+      <div class="day" onclick="go('day')">
+        <div class="daynum"><b>1</b><small>Aug 2</small></div>
+        <div style="flex:1">
+          <div class="row"><b>Chain O Lakes</b><span class="tiny">435 mi</span></div>
+          <p class="tiny" style="margin:3px 0 0">Ohio → Indiana → Illinois · Chicago · 14 photos</p>
+          <div class="thumbs"><div class="thumb"></div><div class="thumb b"></div><div class="thumb c"></div></div>
+        </div>
+      </div>
+      <h2>Coming up</h2>
+      <div class="day" style="opacity:.62" onclick="go('place')">
+        <div class="daynum"><b>3</b><small>Aug 4</small></div>
+        <div style="flex:1"><div class="row"><b>Eggerts Landing</b><span class="tiny">3 hr 42</span></div>
+          <p class="tiny" style="margin:3px 0 0">North Dakota · $26 · booked</p></div>
+      </div>
+      <div class="day" style="opacity:.62" onclick="go('place')">
+        <div class="daynum"><b>4</b><small>Aug 5</small></div>
+        <div style="flex:1"><div class="row"><b>Theodore Roosevelt NP</b><span class="tiny">3 hr 53</span></div>
+          <p class="tiny" style="margin:3px 0 0">Medora · $37 · pay on arrival</p></div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────────── A PLACE ─────────────────────────── -->
+    <section class="screen" id="place">
+      <button class="back" onclick="go('trip')">←</button>
+      <h1 style="margin-top:6px">Zion</h1>
+      <p class="sub">Hoped for Sep 4–7 · 3 nights · 7 hr 32 from Yosemite</p>
+      <h2>26 things she wanted to see</h2>
+      <div class="card" style="padding:4px 14px">
+        <ul class="check">
+          <li><span class="box done"></span><span class="done-txt">The Narrows Bottom-Up · 9.4 mi</span></li>
+          <li><span class="box done"></span><span class="done-txt">Riverside Walk Trail · 2 mi</span></li>
+          <li><span class="box"></span><span>Angels Landing
+            <span class="hers">“permit required. super steep, rlly scary. I am too scared of heights for this hike”</span></span></li>
+          <li><span class="box"></span><span>Emerald Pools · 1.2 mi</span></li>
+          <li><span class="box"></span><span>Canyon Overlook Trail · 1 mi</span></li>
+          <li><span class="box"></span><span>Canyon Junction Bridge
+            <span class="hers">“really good for sunset, watchman peak glows and reflects in the river”</span></span></li>
+          <li><span class="box"></span><span>Checkerboard Mesa</span></li>
+          <li><span class="box"></span><span>Kanarraville Falls · 3.5 mi</span></li>
+        </ul>
+        <p class="tiny" style="padding:9px 0 12px">…and 18 more</p>
+      </div>
+      <h2>Getting in</h2>
+      <div class="card">
+        <div class="row"><span>Zion Outfitter — canyoneering boots</span><b>$35</b></div>
+        <p class="tiny" style="margin:6px 0 0">per person · pick up before 10am. Not booked.</p>
+      </div>
+    </section>
+
+    <!-- ────────────────────────────── MAP ───────────────────────────── -->
+    <section class="screen" id="map">
+      <h1>Where they've been</h1>
+      <p class="sub">441 miles · 3 states · 2 days</p>
+      <div class="maparea">
+        <svg viewBox="0 0 360 330" style="width:100%;height:100%">
+          <rect width="360" height="330" fill="#eef1ec"/>
+          <g stroke="#dfe4dc" stroke-width="1">
+            <path d="M0 70 H360 M0 140 H360 M0 210 H360 M0 280 H360"/>
+            <path d="M70 0 V330 M140 0 V330 M210 0 V330 M280 0 V330"/>
+          </g>
+          <path d="M300 96 C250 108, 205 120, 168 132 C140 141, 118 150, 96 160"
+                fill="none" stroke="#1f6f5c" stroke-width="4" stroke-linecap="round"/>
+          <path d="M96 160 C80 166, 66 172, 54 178" fill="none" stroke="#1f6f5c"
+                stroke-width="4" stroke-linecap="round" stroke-dasharray="2 7"/>
+          <circle cx="300" cy="96" r="6.5" fill="#14110e"/>
+          <circle cx="168" cy="132" r="6.5" fill="#c8621f"/>
+          <circle cx="96" cy="160" r="9" fill="#1f6f5c" opacity=".28"/>
+          <circle cx="96" cy="160" r="5.5" fill="#1f6f5c"/>
+          <text x="252" y="86" font-size="11" fill="#57514a">Garrettsville</text>
+          <text x="150" y="122" font-size="11" fill="#c8621f">Chicago</text>
+          <text x="46" y="182" font-size="11" fill="#1f6f5c">they are here</text>
+        </svg>
+      </div>
+      <p class="tiny" style="margin-top:9px">Placeholder. The real map draws the Bouncie polylines — 1,300+ points and climbing.</p>
+
+      <h2>Badges</h2>
+      <div class="badges">
+        <span class="badge">Ohio</span><span class="badge">Indiana</span>
+        <span class="badge">Illinois</span><span class="badge">Wisconsin</span>
+        <span class="badge">First 400-mile day</span>
+        <span class="badge off">Minnesota</span><span class="badge off">First national park</span>
+        <span class="badge off">First 1,000 miles</span><span class="badge off">Pacific Ocean</span>
+      </div>
+      <p class="tiny" style="margin-top:10px">States and miles fill themselves in from the tracker. Nobody taps anything.</p>
+    </section>
+
+    <!-- ─────────────────────── STORYBOARD OVERLAY ───────────────────── -->
+    <div class="sb" id="sb">
+      <div id="sbbody"></div>
+    </div>
+
+    <nav class="navbar">
+      <button class="on" data-go="today"><span class="ic">📍</span>Today</button>
+      <button data-go="trip"><span class="ic">🗓️</span>Trip</button>
+      <button data-go="map"><span class="ic">🗺️</span>Map</button>
+      <button data-go="place"><span class="ic">⛰️</span>Places</button>
+    </nav>
+  </div>
+</div>
+
+<script>
+const SCREENS = {
+  today:'Today', stop:'Record a stop', stopdone:'Stop saved',
+  day:'The day', trip:'The trip', place:'A place', map:'Map'
+};
+
+const STORY = {
+  today:`<h3>Today</h3><p>Read-only. This is what Lily and Ada open by default.</p>
+    <div class="w"><b>Position and speed</b><br>Latest <code>track_points</code> row from the Bouncie webhook. No polling by the phone.</div>
+    <div class="w"><b>Miles</b><br><code>v_day_summary</code> for today, <code>v_trip_mileage</code> for the total. Local date, not UTC.</div>
+    <div class="w"><b>Tonight</b><br>Next <code>reservation</code> by <code>check_in_at</code>. If one had a cancellation deadline coming, it would say so here.</div>`,
+  stop:`<h3>Record a stop</h3><p>The only thing they touch while driving. One tap is the whole interaction.</p>
+    <div class="w"><b>On tap</b><br>Writes a <code>stop</code> row: kind, <code>occurred_at</code>, lat/lon from the browser, <code>tz_offset</code>, author. Nothing else is required.</div>
+    <div class="w"><b>Offline</b><br>Queued in IndexedDB and sent when signal returns. The screen says saved either way — it is saved, locally.</div>
+    <div class="w"><b>Why it matters</b><br>A gas stop becomes a fuel record. A campsite becomes the day's anchor. An observation is a micro journal entry. One button, three features.</div>`,
+  stopdone:`<h3>Stop saved</h3><p>Confirmation is instant and the extras are genuinely optional.</p>
+    <div class="w"><b>Deliberate</b><br>No required fields. Anything asked for at a pump in 100° heat is a field that stops getting filled by week two.</div>
+    <div class="w"><b>Later</b><br>Gallons, cost and notes can be added that night from the day screen.</div>`,
+  day:`<h3>The day</h3><p>The spine made visible. Everything that happened on one local date.</p>
+    <div class="w"><b>Assembled from</b><br><code>v_day_summary</code> plus that date's <code>stop</code>, <code>photo</code> and <code>journal_entry</code> rows.</div>
+    <div class="w"><b>The track</b><br>Bouncie polyline for segments starting that local day.</div>
+    <div class="w"><b>Journal</b><br>Typed here or lifted from the iMessage thread, attributed either way. The share flag is per entry.</div>`,
+  trip:`<h3>The trip</h3><p>The parents' home screen. Newest day first, then what is coming.</p>
+    <div class="w"><b>Past days</b><br><code>day</code> joined to <code>v_day_summary</code>. Empty days stay in the list rather than disappearing.</div>
+    <div class="w"><b>Coming up</b><br><code>intention</code> rows by <code>seq</code>, shown faded. These are hopes, not commitments — nothing is ever marked late or missed.</div>`,
+  place:`<h3>A place</h3><p>One intention and everything Lily wrote about it.</p>
+    <div class="w"><b>The checklist</b><br><code>activity</code> rows. Ticking one sets <code>done</code> and <code>done_date</code> — that is the entire attractions badge system.</div>
+    <div class="w"><b>Her voice</b><br>The italic lines are verbatim from her vault and never get cleaned up. That is the point of the archive.</div>
+    <div class="w"><b>If they skip it</b><br>Nothing happens. No days attach, and it stays here unvisited.</div>`,
+  map:`<h3>Map</h3><p>Route so far, and the badges that earn themselves.</p>
+    <div class="w"><b>The line</b><br>Bouncie polylines for in-trip segments. Aug 2 has route shape but no timestamps — the webhook only started today.</div>
+    <div class="w"><b>Badges</b><br>States and miles are computed from the track. Nobody taps anything; they appear while the car is moving.</div>`
+};
+
+function go(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on', s.id===id));
+  document.querySelectorAll('#switch button').forEach(b=>b.classList.toggle('on', b.dataset.go===id));
+  document.querySelectorAll('.navbar button').forEach(b=>b.classList.toggle('on', b.dataset.go===id));
+  document.getElementById('sbbody').innerHTML = STORY[id] || '';
+  document.querySelector('.screen.on').scrollTop = 0;
+}
+function toggleSb(){ document.getElementById('sb').classList.toggle('on'); }
+
+const sw = document.getElementById('switch');
+Object.entries(SCREENS).forEach(([id,label])=>{
+  const b=document.createElement('button'); b.textContent=label; b.dataset.go=id;
+  b.onclick=()=>go(id); if(id==='today') b.classList.add('on'); sw.appendChild(b);
+});
+document.querySelectorAll('.navbar button').forEach(b=>b.onclick=()=>go(b.dataset.go));
+go('today');
+</script>
+</body>
+</html>
