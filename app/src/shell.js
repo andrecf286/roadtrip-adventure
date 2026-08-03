@@ -717,21 +717,26 @@ function mapSvg(d, arcs, W, H){
   var land = arcs.map(function(a){
     var dd="";
     for (var i=0;i<a.length;i++) dd += (i?"L":"M")+px(a[i][0]).toFixed(1)+" "+py(a[i][1]).toFixed(1);
-    return '<path d="'+dd+'" fill="none" stroke="#d3ddd6" stroke-width="1"/>';
+    return '<path d="'+dd+'" fill="none" stroke="#d3ddd6" stroke-width="1" vector-effect="non-scaling-stroke"/>';
   }).join("");
   var route = pts.map(function(p,i){ return (i?"L":"M")+px(p[0]).toFixed(1)+" "+py(p[1]).toFixed(1); }).join(" ");
   var pins = (d.stops||[]).map(function(st){
     return '<circle cx="'+px(st.lon).toFixed(1)+'" cy="'+py(st.lat).toFixed(1)+
-           '" r="3.5" fill="#c8621f" stroke="#fff" stroke-width="1"/>'; }).join("");
+           '" r="3.5" data-r="3.5" fill="#c8621f" stroke="#fff" stroke-width="1" vector-effect="non-scaling-stroke"/>'; }).join("");
   var st0 = pts[0];
   var here = d.current
-    ? '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="10" fill="#1f6f5c" opacity=".22"/>' +
-      '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="5" fill="#1f6f5c" stroke="#fff" stroke-width="1.5"/>' : "";
+    ? '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="10" data-r="10" fill="#1f6f5c" opacity=".22"/>' +
+      '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="5" data-r="5" fill="#1f6f5c" stroke="#fff" stroke-width="1.5" vector-effect="non-scaling-stroke"/>' : "";
+  // Markers and strokes are kept screen-constant across zoom: strokes via
+  // vector-effect=non-scaling-stroke, marker RADII via applyVB() counter-scaling
+  // (data-r holds the fit-size radius). Without this, zooming the viewBox
+  // magnifies the fixed-radius "now" dot into a screen-filling blob.
   return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:100%">' +
     '<rect width="'+W+'" height="'+H+'" fill="#f4f7f4"/>' + '<g id="landlayer">' + land + '</g>' +
-    '<g id="routelayer"><path d="'+route+'" fill="none" stroke="#1f6f5c" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/></g>' +
-    '<circle cx="'+px(st0[0]).toFixed(1)+'" cy="'+py(st0[1]).toFixed(1)+'" r="4" fill="#14110e" stroke="#fff" stroke-width="1.5"/>' +
-    pins + here + '</svg>';
+    '<g id="routelayer"><path d="'+route+'" fill="none" stroke="#1f6f5c" stroke-width="2.6" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></g>' +
+    '<g id="marklayer">' +
+    '<circle cx="'+px(st0[0]).toFixed(1)+'" cy="'+py(st0[1]).toFixed(1)+'" r="4" data-r="4" fill="#14110e" stroke="#fff" stroke-width="1.5" vector-effect="non-scaling-stroke"/>' +
+    pins + here + '</g></svg>';
 }
 function geo(){
   if (GEO) return Promise.resolve(GEO);
@@ -791,6 +796,20 @@ function svgEl(){ var b = el("bigmap"); return b && b.querySelector("svg"); }
 function applyVB(){
   var sv = svgEl(); if (!sv || !VB) return;
   sv.setAttribute("viewBox", VB.x.toFixed(2)+" "+VB.y.toFixed(2)+" "+VB.w.toFixed(2)+" "+VB.h.toFixed(2));
+  // Keep marker dots a constant SCREEN size: as the viewBox shrinks on zoom-in,
+  // shrink each marker's user-space radius by the same factor. Strokes handle
+  // themselves via vector-effect=non-scaling-stroke.
+  if (VB0) {
+    var k = VB.w / VB0.w;
+    var ml = document.getElementById("marklayer");
+    if (ml) {
+      var cs = ml.querySelectorAll("circle");
+      for (var i = 0; i < cs.length; i++) {
+        var br = parseFloat(cs[i].getAttribute("data-r"));
+        if (br) cs[i].setAttribute("r", (br * k).toFixed(2));
+      }
+    }
+  }
 }
 function zoomAt(factor, cx, cy){
   if (!VB) return;
@@ -829,18 +848,17 @@ function fetchDetail(){
     lay.innerHTML = fine.map(function(a){
       var dd = "";
       for (var i=0;i<a.length;i++) dd += (i?"L":"M")+PROJ.px(a[i][0]).toFixed(1)+" "+PROJ.py(a[i][1]).toFixed(1);
-      return '<path d="'+dd+'" fill="none" stroke="#d3ddd6" stroke-width="1"/>';
+      return '<path d="'+dd+'" fill="none" stroke="#d3ddd6" stroke-width="1" vector-effect="non-scaling-stroke"/>';
     }).join("");
   });
 
   get("/api/track?w="+w+"&s="+s2+"&e="+e+"&n="+n+"&max=2500").then(function(r){
     if (!r || !r.tracks || DETAIL_KEY !== key) return;
-    var width = Math.max(0.9, 2.6 / Math.sqrt(zoom));
     layer.innerHTML = r.tracks.map(function(t){
       return '<path d="' + t.map(function(p,i){
         return (i?"L":"M") + PROJ.px(p[0]).toFixed(2) + " " + PROJ.py(p[1]).toFixed(2);
-      }).join(" ") + '" fill="none" stroke="#1f6f5c" stroke-width="' + width.toFixed(2) +
-      '" stroke-linejoin="round" stroke-linecap="round"/>';
+      }).join(" ") + '" fill="none" stroke="#1f6f5c" stroke-width="2.6"' +
+      ' vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>';
     }).join("");
   });
 }
