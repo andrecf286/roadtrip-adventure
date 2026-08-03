@@ -780,6 +780,28 @@ function loadMapScreen(){
   });
 }
 
+/* Pinch, drag and double-tap on the map. Implemented by moving the SVG viewBox
+   rather than a CSS transform, so the route and state outlines stay crisp at
+   any zoom instead of turning into a blurry upscaled bitmap. Restored 2026-08-03
+   (session-daap0w) — the eb8bdf1 mapSvg() consolidation dropped these four
+   definitions while keeping every caller, so attachZoom() threw on svgEl() and
+   the whole Map screen was frozen. Verbatim from fd64341. */
+var VB0 = null, VB = null;
+function svgEl(){ var b = el("bigmap"); return b && b.querySelector("svg"); }
+function applyVB(){
+  var sv = svgEl(); if (!sv || !VB) return;
+  sv.setAttribute("viewBox", VB.x.toFixed(2)+" "+VB.y.toFixed(2)+" "+VB.w.toFixed(2)+" "+VB.h.toFixed(2));
+}
+function zoomAt(factor, cx, cy){
+  if (!VB) return;
+  var nw = VB.w / factor, nh = VB.h / factor;
+  // Clamp: 12x in, and never further out than the original fit.
+  if (nw < VB0.w/12 || nw > VB0.w) return;
+  VB = { x: cx - (cx - VB.x) * (nw/VB.w), y: cy - (cy - VB.y) * (nh/VB.h), w: nw, h: nh };
+  applyVB();
+}
+function zoomBy(f){ if (VB) { zoomAt(f, VB.x + VB.w/2, VB.y + VB.h/2); wantDetail(); } }
+
 var DETAIL_T = null, DETAIL_KEY = null;
 function wantDetail(){ clearTimeout(DETAIL_T); DETAIL_T = setTimeout(fetchDetail, 260); }
 
