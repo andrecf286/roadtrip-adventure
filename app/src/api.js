@@ -427,3 +427,72 @@ export async function deleteJournal(env, person, body) {
   await env.roadtrip.prepare(`DELETE FROM journal_entry WHERE id = ?`).bind(body.id).run();
   return json({ ok: true });
 }
+
+/**
+ * Route detail for a viewport.
+ *
+ * The overview sends 90 points per segment, which is right for the whole
+ * country and useless the moment you zoom: magnifying 90 points just gives you
+ * bigger straight lines. The full geometry is already stored — roughly 8,400
+ * points for the first two days against the 720 the overview ships — it was
+ * simply never asked for.
+ *
+ * So detail is fetched per viewport. Segments are filtered by their stored
+ * bounding box first, so geometry that cannot be seen is never parsed, then
+ * points outside the box are dropped and what remains is thinned to `max`.
+ * Zoom in far enough and you get every recorded fix; zoom out and you are back
+ * to the overview, at the same cost as before.
+ */
+export async function track(env, q) {
+  const w = parseFloat(q.get("w")), s2 = parseFloat(q.get("s"));
+  const e = parseFloat(q.get("e")), n = parseFloat(q.get("n"));
+  const max = Math.min(parseInt(q.get("max") || "1500", 10), 6000);
+  if ([w, s2, e, n].some(Number.isNaN)) return json({ error: "bbox required" }, 400);
+
+  const rows = await env.roadtrip
+    .prepare(
+      `SELECT t.transaction_id, t.gps
+         FROM trips t, trip_meta m
+        WHERE t.start_time >= m.trip_start_at
+          AND t.gps IS NOT NULL
+          AND t.min_lon <= ? AND t.max_lon >= ?
+          AND t.min_lat <= ? AND t.max_lat >= ?
+        ORDER BY t.start_time`)
+    .bind(e, w, n, s2)
+    .all();
+
+  // Keep a point just outside the viewport on either side of every visible
+  // run, so lines reach the edge of the screen instead of stopping short of it.
+  const tracks = [];
+  for (const r of rows.results) {
+    let cs;
+    try { cs = JSON.parse(r.gps).coordinates || []; } catch { continue; }
+    let run = [];
+    for (let i = 0; i < cs.length; i++) {
+      const [lon, lat] = cs[i];
+      const inside = lon >= w && lon <= e && lat >= s2 && lat <= n;
+      if (inside) {
+        if (!run.length && i > 0) run.push(cs[i - 1]);
+        run.push(cs[i]);
+      } else if (run.length) {
+        run.push(cs[i]);
+        tracks.push(run);
+        run = [];
+      }
+    }
+    if (run.length > 1) tracks.push(run);
+  }
+
+  const total = tracks.reduce((a, t) => a + t.length, 0);
+  const out = total <= max ? tracks : tracks.map((t) => {
+    const share = Math.max(2, Math.floor((t.length / total) * max));
+    if (t.length <= share) return t;
+    const step = (t.length - 1) / (share - 1);
+    const r = [];
+    for (let i = 0; i < share - 1; i++) r.push(t[Math.round(i * step)]);
+    r.push(t[t.length - 1]);
+    return r;
+  });
+
+  return json({ tracks: out, points: out.reduce((a, t) => a + t.length, 0), available: total });
+}

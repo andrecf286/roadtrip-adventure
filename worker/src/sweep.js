@@ -86,13 +86,29 @@ export async function runSweep(env, days = 4) {
       cursor = end;
     }
 
+    // Bounding box computed on write. The zoomed-in map filters segments by
+    // box so it never parses geometry it cannot see.
+    const boxOf = (gps) => {
+      try {
+        const cs = (typeof gps === "string" ? JSON.parse(gps) : gps).coordinates || [];
+        if (!cs.length) return [null, null, null, null];
+        let a = 90, b = -90, c = 180, d = -180;
+        for (const [lon, lat] of cs) {
+          if (lat < a) a = lat; if (lat > b) b = lat;
+          if (lon < c) c = lon; if (lon > d) d = lon;
+        }
+        return [a, b, c, d];
+      } catch { return [null, null, null, null]; }
+    };
+
     const stmt = env.roadtrip.prepare(
       `INSERT INTO trips (transaction_id, imei, vin, start_time, end_time,
                           start_odometer, end_odometer, distance, average_speed,
                           max_speed, fuel_consumed, total_idle_duration,
                           hard_braking_count, hard_acceleration_count,
-                          time_zone, gps, gps_format, source, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'geojson', 'sweep', ?)
+                          time_zone, gps, gps_format, source, updated_at,
+                          min_lat, max_lat, min_lon, max_lon)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'geojson', 'sweep', ?, ?, ?, ?, ?)
        ON CONFLICT(transaction_id) DO UPDATE SET
          end_time            = COALESCE(trips.end_time, excluded.end_time),
          end_odometer        = COALESCE(trips.end_odometer, excluded.end_odometer),
@@ -104,12 +120,18 @@ export async function runSweep(env, days = 4) {
          time_zone           = COALESCE(trips.time_zone, excluded.time_zone),
          gps                 = COALESCE(trips.gps, excluded.gps),
          gps_format          = COALESCE(trips.gps_format, excluded.gps_format),
+         min_lat             = COALESCE(trips.min_lat, excluded.min_lat),
+         max_lat             = COALESCE(trips.max_lat, excluded.max_lat),
+         min_lon             = COALESCE(trips.min_lon, excluded.min_lon),
+         max_lon             = COALESCE(trips.max_lon, excluded.max_lon),
          updated_at          = excluded.updated_at`
     );
 
     const now2 = new Date().toISOString();
-    const batch = trips.map((t) =>
-      stmt.bind(
+    const batch = trips.map((t) => {
+      const g = t.gps ? (typeof t.gps === "string" ? t.gps : JSON.stringify(t.gps)) : null;
+      const [mnLat, mxLat, mnLon, mxLon] = boxOf(g);
+      return stmt.bind(
         t.transactionId ?? null, t.imei ?? env.BOUNCIE_IMEI, null,
         t.startTime ?? null, t.endTime ?? null,
         t.startOdometer ?? null, t.endOdometer ?? null,
@@ -117,10 +139,11 @@ export async function runSweep(env, days = 4) {
         t.fuelConsumed ?? null, t.totalIdleDuration ?? null,
         t.hardBrakingCount ?? null, t.hardAccelerationCount ?? null,
         t.timeZone ?? null,
-        t.gps ? (typeof t.gps === "string" ? t.gps : JSON.stringify(t.gps)) : null,
-        now2
-      )
-    );
+        g,
+        now2,
+        mnLat, mxLat, mnLon, mxLon
+      );
+    });
     if (batch.length) await env.roadtrip.batch(batch);
     repaired = batch.length;
   } catch (err) {

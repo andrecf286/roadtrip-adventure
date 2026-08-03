@@ -215,8 +215,11 @@ function tab(name){
   for(var i=0;i<bs.length;i++) bs[i].classList.toggle("on", bs[i].dataset.tab===name);
   if(name==="today") loadToday();
   if(name==="trip") loadTrip();
-  if(name==="map") loadMap();
+  if(name==="journal") loadJournal();
+  if(name==="photos") loadPhotos();
   if(name==="places") loadPlaces();
+  // "map" is no longer a tab — it lives at the head of Trip and opens full
+  // size from there via loadMapScreen().
 }
 
 function loadToday(){
@@ -612,6 +615,7 @@ function drawMap(containerId, height, onTap){
   });
 }
 
+var PROJ = null;
 function mapSvg(d, arcs, W, H){
   var pts = [];
   (d.tracks||[]).forEach(function(t){ t.forEach(function(c){ pts.push(c); }); });
@@ -628,6 +632,11 @@ function mapSvg(d, arcs, W, H){
   var scale = Math.min(W/(spanX*pad), H/(spanY*pad));
   var px=function(lon){ return W/2 + (lon-cx)*kx*scale; };
   var py=function(lat){ return H/2 - (lat-cy)*scale; };
+  // Kept so a detail fetch can reproject its points into the same frame
+  // without redrawing the boundaries underneath.
+  PROJ = { px:px, py:py, W:W, H:H,
+           lon:function(X){ return cx + (X - W/2)/(kx*scale); },
+           lat:function(Y){ return cy - (Y - H/2)/scale; } };
 
   var land = arcs.map(function(a){
     var dd="";
@@ -644,7 +653,7 @@ function mapSvg(d, arcs, W, H){
       '<circle cx="'+px(d.current.lon).toFixed(1)+'" cy="'+py(d.current.lat).toFixed(1)+'" r="5" fill="#1f6f5c" stroke="#fff" stroke-width="1.5"/>' : "";
   return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:100%">' +
     '<rect width="'+W+'" height="'+H+'" fill="#f4f7f4"/>' + land +
-    '<path d="'+route+'" fill="none" stroke="#1f6f5c" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>' +
+    '<g id="routelayer"><path d="'+route+'" fill="none" stroke="#1f6f5c" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/></g>' +
     '<circle cx="'+px(st0[0]).toFixed(1)+'" cy="'+py(st0[1]).toFixed(1)+'" r="4" fill="#14110e" stroke="#fff" stroke-width="1.5"/>' +
     pins + here + '</svg>';
 }
@@ -758,8 +767,44 @@ function zoomAt(factor, cx, cy){
   VB = { x: cx - (cx - VB.x) * (nw/VB.w), y: cy - (cy - VB.y) * (nh/VB.h), w: nw, h: nh };
   applyVB();
 }
-function zoomBy(f){ if (VB) zoomAt(f, VB.x + VB.w/2, VB.y + VB.h/2); }
-function zoomReset(){ if (VB0) { VB = Object.assign({}, VB0); applyVB(); } }
+function zoomBy(f){ if (VB) { zoomAt(f, VB.x + VB.w/2, VB.y + VB.h/2); wantDetail(); } }
+
+/* Zoom used to magnify the same 90-points-per-segment overview, which is why
+   more zoom gave no more road. The full geometry was in the database the whole
+   time — about 8,400 points for the first two days against the 720 the overview
+   ships — it was simply never requested. Once the viewport is meaningfully
+   tighter than the full fit, ask for what is inside it. */
+var DETAIL_T = null, DETAIL_KEY = null;
+function wantDetail(){ clearTimeout(DETAIL_T); DETAIL_T = setTimeout(fetchDetail, 260); }
+
+function fetchDetail(){
+  if (!VB || !VB0 || !PROJ) return;
+  var layer = document.getElementById("routelayer");
+  if (!layer) return;
+  var zoom = VB0.w / VB.w;
+
+  if (zoom < 1.35) {                       // back at the overview
+    if (DETAIL_KEY !== null) { DETAIL_KEY = null; loadMapScreen(); }
+    return;
+  }
+  var w = PROJ.lon(VB.x), e = PROJ.lon(VB.x + VB.w);
+  var n = PROJ.lat(VB.y), s2 = PROJ.lat(VB.y + VB.h);
+  var key = [w,s2,e,n].map(function(v){ return v.toFixed(2); }).join(",");
+  if (key === DETAIL_KEY) return;
+  DETAIL_KEY = key;
+
+  get("/api/track?w="+w+"&s="+s2+"&e="+e+"&n="+n+"&max=2500").then(function(r){
+    if (!r || !r.tracks || DETAIL_KEY !== key) return;
+    var width = Math.max(0.9, 2.6 / Math.sqrt(zoom));
+    layer.innerHTML = r.tracks.map(function(t){
+      return '<path d="' + t.map(function(p,i){
+        return (i?"L":"M") + PROJ.px(p[0]).toFixed(2) + " " + PROJ.py(p[1]).toFixed(2);
+      }).join(" ") + '" fill="none" stroke="#1f6f5c" stroke-width="' + width.toFixed(2) +
+      '" stroke-linejoin="round" stroke-linecap="round"/>';
+    }).join("");
+  });
+}
+function zoomReset(){ if (VB0) { VB = Object.assign({}, VB0); applyVB(); DETAIL_KEY = null; loadMapScreen(); } }
 
 function attachZoom(){
   var box = el("bigmap"), sv = svgEl();
@@ -808,7 +853,7 @@ function attachZoom(){
   function up(e){
     delete pts[e.pointerId];
     if (Object.keys(pts).length < 2) lastDist = null;
-    if (Object.keys(pts).length === 0) dragFrom = null;
+    if (Object.keys(pts).length === 0) { dragFrom = null; wantDetail(); }
   }
   box.addEventListener("pointerup", up);
   box.addEventListener("pointercancel", up);
@@ -818,6 +863,7 @@ function attachZoom(){
     e.preventDefault();
     var p = toSvg(e.clientX, e.clientY);
     zoomAt(e.deltaY < 0 ? 1.15 : 1/1.15, p.x, p.y);
+    wantDetail();
   }, { passive:false });
 }
 

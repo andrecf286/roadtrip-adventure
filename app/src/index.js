@@ -80,6 +80,7 @@ export default {
         case "/api/photos":      return api.photos(env);
         case "/api/reservation": return api.reservation(env, url.searchParams.get("id"));
         case "/api/map":         return api.map(env);
+        case "/api/track":       return api.track(env, url.searchParams);
         case "/api/stop":
           if (request.method === "DELETE") return api.deleteStop(env, person, body);
           return request.method === "PATCH"
