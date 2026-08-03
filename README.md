@@ -172,3 +172,25 @@ under ~15 KB.
 
 Deploy: `cd app && npx wrangler deploy`. Secrets are `SESSION_SECRET` and
 `MINT_SECRET`.
+
+## The nightly sweep
+
+The webhook is the real-time path. The sweep is the guarantee.
+
+On 2026-08-03 the trip-event handler read the wrong envelope key, bound a row
+of NULLs, and returned 200 to Bouncie eight times without throwing. Four hours
+of driving never reached the database and nobody found out until Andy looked
+at a mileage figure and knew it was wrong. Silent success is the failure mode
+this project keeps hitting.
+
+So `roadtrip-ingest` now runs a scheduled sweep at 09:10 UTC that re-pulls the
+last four days from Bouncie's REST API and fills any gaps. Trips are retained
+indefinitely upstream, so the worst case for a future parser bug becomes "the
+numbers are right by morning" rather than "part of the trip is gone".
+
+`COALESCE` favours what is already stored, so the sweep repairs holes and never
+overwrites the live path. Every run — including failures — records itself in
+`sweep_runs`, and `GET /stats` reports the last one, because a sweep that
+silently stops running is the same class of bug it exists to catch.
+
+Manual trigger: `POST /sweep?days=N` with the ingest auth key.

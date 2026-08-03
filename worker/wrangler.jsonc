@@ -4,6 +4,8 @@
   "compatibility_date": "2026-07-01",
   "observability": { "enabled": true },
   "workers_dev": true,
+  // 09:10 UTC — a little after 4am Eastern, well clear of any driving.
+  "triggers": { "crons": ["10 9 * * *"] },
   "d1_databases": [
     {
       "binding": "roadtrip",

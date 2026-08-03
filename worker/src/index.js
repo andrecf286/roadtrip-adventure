@@ -19,6 +19,8 @@
  *   - If the raw insert fails we return 500 so Bouncie retries with backoff.
  */
 
+import { runSweep } from './sweep.js';
+
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj, null, 2), {
     status,
@@ -36,6 +38,11 @@ function authorized(request, env) {
 }
 
 export default {
+  // Nightly repair. See sweep.js for why this exists alongside the webhook.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runSweep(env, 4));
+  },
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
@@ -63,6 +70,13 @@ export default {
             .all(),
         ]);
 
+        // A sweep that quietly stops running is the same class of failure the
+        // sweep exists to catch, so its last run is part of the health report.
+        const sweep = await env.roadtrip
+          .prepare('SELECT started_at, trips_seen, error FROM sweep_runs ORDER BY id DESC LIMIT 1')
+          .first()
+          .catch(() => null);
+
         const last = latest?.t ? new Date(latest.t) : null;
         const minutesSince = last ? Math.round((Date.now() - last.getTime()) / 60000) : null;
 
@@ -75,10 +89,18 @@ export default {
           last_event_at: latest?.t ?? null,
           minutes_since_last_event: minutesSince,
           points_by_day: byDay?.results ?? [],
+          last_sweep: sweep
+            ? { at: sweep.started_at, trips_seen: sweep.trips_seen, error: sweep.error }
+            : null,
         });
       } catch (err) {
         return json({ ok: false, error: String(err) }, 500);
       }
+    }
+
+    if (path === '/sweep') {
+      if (!authorized(request, env)) return json({ error: 'unauthorized' }, 401);
+      return json(await runSweep(env, Number(url.searchParams.get('days') || 4)));
     }
 
     if (path === '/bouncie') {
