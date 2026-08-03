@@ -56,12 +56,36 @@ built and deployed before the data model was settled.
 ## Layout
 
 ```
-worker/          Cloudflare Worker — Bouncie webhook receiver
-  src/index.js   Ingest endpoint, auth, event parsing
-  migrations/    D1 schema, applied in order
-scripts/         backfill and seed utilities
-  wrangler.jsonc Deploy config
+worker/
+  src/index.js    Ingest endpoint — auth, event parsing
+  migrations/     D1 schema, applied in numeric order
+  wrangler.jsonc  Deploy config
+scripts/
+  backfill_trips.py    Historical trips from the Bouncie REST API
+  seed_itinerary.py    People, days, and the itinerary overlay from the vault
 ```
+
+## Data model — the day is the spine
+
+The trip is a sequence of days. Track segments, stops, photos and journal entries
+all attach to a day; the itinerary is an *overlay* on that timeline rather than the
+structure beneath it.
+
+The instinct is to organise by destination. That fails here because the itinerary is
+aspirational: destinations get skipped, split across non-consecutive days, merged,
+or invented on the spot with no plan entry behind them — the diner, the breakdown,
+the person met at a campground. A destination-shaped spine can't hold those. A day
+can't be revised.
+
+It also makes "didn't happen" free. An intention with no days attached is simply
+unvisited — no variance state, no error, no flag.
+
+Badges are derived in views, never stored. States and miles come from the track;
+attractions come from checking off Lily's own activity lists.
+
+**Timezones:** they cross three. Every instant is stored UTC in a `*_at` column with
+the local offset alongside, and day assignment always uses the *local* date — an 11pm
+photo belongs to that evening, not to the UTC day already underway in Greenwich.
 
 ## Ingest Worker
 
