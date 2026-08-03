@@ -1,0 +1,14 @@
+{
+  "name": "roadtrip-ingest",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true },
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "roadtrip",
+      "database_name": "roadtrip",
+      "database_id": "7814cda6-3bcb-4ae1-aae8-af6f67aed3a1"
+    }
+  ]
+}
