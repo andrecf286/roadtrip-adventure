@@ -161,21 +161,37 @@ async function processEvent(env, evt, rawId) {
     }
 
     if (type === 'tripStart' || type === 'tripEnd' || type === 'tripMetrics') {
-      const d = evt.data ?? evt;
+      // Bouncie envelopes each trip event under a DIFFERENT key — `start`,
+      // `end`, `metrics` — and the field names inside do not match the REST
+      // API's. The first version read `evt.data`, got undefined for every
+      // field, bound a row of NULLs, and the COALESCE upsert dutifully kept
+      // the nulls. Nothing threw. `parse_error` stayed empty. Four hours of
+      // driving simply never appeared, and the only reason anyone noticed was
+      // Andy looking at the mileage and knowing it was wrong.
+      //
+      // Verbatim shapes, captured from the archive 2026-08-03:
+      //   tripStart   { start:   { timestamp, timezone, reportedPids[] } }
+      //   tripEnd     { end:     { timestamp, timezone, odometer, fuelConsumed } }
+      //   tripMetrics { metrics: { timestamp, tripTime, tripDistance,
+      //                            totalIdlingTime, maxSpeed, averageDriveSpeed,
+      //                            hardBrakingCounts, hardAccelerationCounts } }
+      const st = evt.start || {};
+      const en = evt.end || {};
+      const me = evt.metrics || {};
+
       await env.roadtrip
         .prepare(
           `INSERT INTO trips (transaction_id, imei, vin, start_time, end_time,
-                              start_odometer, end_odometer, distance, average_speed,
-                              max_speed, fuel_consumed, total_idle_duration,
+                              end_odometer, distance, average_speed, max_speed,
+                              fuel_consumed, total_idle_duration,
                               hard_braking_count, hard_acceleration_count,
                               time_zone, source, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'webhook', ?)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'webhook', ?)
            ON CONFLICT(transaction_id) DO UPDATE SET
              imei                    = COALESCE(excluded.imei, trips.imei),
              vin                     = COALESCE(excluded.vin, trips.vin),
              start_time              = COALESCE(excluded.start_time, trips.start_time),
              end_time                = COALESCE(excluded.end_time, trips.end_time),
-             start_odometer          = COALESCE(excluded.start_odometer, trips.start_odometer),
              end_odometer            = COALESCE(excluded.end_odometer, trips.end_odometer),
              distance                = COALESCE(excluded.distance, trips.distance),
              average_speed           = COALESCE(excluded.average_speed, trips.average_speed),
@@ -191,18 +207,17 @@ async function processEvent(env, evt, rawId) {
           evt.transactionId ?? null,
           evt.imei ?? null,
           evt.vin ?? null,
-          type === 'tripStart' ? d.timestamp ?? d.startTime ?? null : d.startTime ?? null,
-          type === 'tripEnd' ? d.timestamp ?? d.endTime ?? null : d.endTime ?? null,
-          d.startOdometer ?? (type === 'tripStart' ? d.odometer ?? null : null),
-          d.endOdometer ?? (type === 'tripEnd' ? d.odometer ?? null : null),
-          d.distance ?? null,
-          d.averageSpeed ?? null,
-          d.maxSpeed ?? null,
-          d.fuelConsumed ?? null,
-          d.totalIdleDuration ?? null,
-          d.hardBrakingCount ?? null,
-          d.hardAccelerationCount ?? null,
-          d.timeZone ?? d.timezone ?? null,
+          st.timestamp ?? null,
+          en.timestamp ?? null,
+          en.odometer ?? null,
+          me.tripDistance ?? null,
+          me.averageDriveSpeed ?? null,
+          me.maxSpeed ?? null,
+          en.fuelConsumed ?? null,
+          me.totalIdlingTime ?? null,
+          me.hardBrakingCounts ?? null,
+          me.hardAccelerationCounts ?? null,
+          st.timezone ?? en.timezone ?? null,
           now
         )
         .run();
