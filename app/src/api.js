@@ -179,6 +179,19 @@ export async function trip(env) {
       WHERE date >= ? AND date <= ?
       ORDER BY date DESC`).bind(meta.departure_date, today_).all();
 
+  // What actually happened each day, not just how much of it: the stops
+  // themselves, in order, so a Trip row can read "gas · Culver's · Schroeder
+  // County Park" instead of "2 stops". One query for the whole range, grouped
+  // in JS — the day list is bounded by the trip's length.
+  const stopRows = await env.roadtrip.prepare(
+    `SELECT date, kind, place FROM stop
+      WHERE date >= ? AND date <= ? ORDER BY date, occurred_at`
+  ).bind(meta.departure_date, today_).all();
+  const stopsByDate = {};
+  for (const s of stopRows.results)
+    (stopsByDate[s.date] = stopsByDate[s.date] || []).push({ kind: s.kind, place: s.place });
+  for (const d of days.results) d.stop_list = stopsByDate[d.date] || [];
+
   // Faded, undated, ordered by Lily's original sequence. These are hopes.
   // Nothing here is ever marked late, missed, or overdue.
   const ahead = await env.roadtrip.prepare(
@@ -321,6 +334,141 @@ export async function map(env) {
   });
 }
 
+/* ----------------------------------------------------------------- badges */
+
+import { STATE_POLYS } from "./geo_states_named.js";
+
+// Precomputed bounding boxes make the point-in-state test cheap: most points
+// skip most states on the bbox alone.
+const STATE_BBOX = STATE_POLYS.map((s) => {
+  let x0 = 180, y0 = 90, x1 = -180, y1 = -90;
+  for (const ring of s.r) for (const [x, y] of ring) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return { x0, y0, x1, y1 };
+});
+
+function inRing(x, y, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi))
+      inside = !inside;
+  }
+  return inside;
+}
+
+function stateOfPoint(x, y) {
+  for (let i = 0; i < STATE_POLYS.length; i++) {
+    const b = STATE_BBOX[i];
+    if (x < b.x0 || x > b.x1 || y < b.y0 || y > b.y1) continue;
+    for (const ring of STATE_POLYS[i].r)
+      if (inRing(x, y, ring)) return STATE_POLYS[i].n;
+  }
+  return null;
+}
+
+// States derivation walks every trip polyline; cache per isolate, keyed on
+// how much track exists, so repeat opens of the Badges tab cost one query.
+let STATES_CACHE = null;
+
+export async function badges(env) {
+  const [trips, points, parks, mileage, fills, bespoke] = await Promise.all([
+    env.roadtrip.prepare(
+      `SELECT t.gps, t.start_time, t.time_zone
+         FROM trips t, trip_meta m
+        WHERE t.start_time >= m.trip_start_at AND t.gps IS NOT NULL
+        ORDER BY t.start_time`).all(),
+    // Webhook-inserted trips carry no polyline until the nightly sweep, so a
+    // state crossed this afternoon would not appear until tomorrow morning if
+    // we only read trips. The live breadcrumbs close that gap; every 15th
+    // point is a fix every few miles, plenty to notice a border.
+    env.roadtrip.prepare(
+      `SELECT lat, lon, ts FROM track_points WHERE (rowid % 15) = 0 ORDER BY ts`).all(),
+    env.roadtrip.prepare(
+      `SELECT i.id, i.name, MIN(di.date) AS first_date
+         FROM day_intention di JOIN intention i ON i.id = di.intention_id
+        WHERE i.kind = 'park'
+        GROUP BY i.id, i.name ORDER BY first_date`).all(),
+    env.roadtrip.prepare(`SELECT * FROM v_trip_mileage`).first(),
+    env.roadtrip.prepare(
+      `SELECT COUNT(*) AS n FROM stop WHERE kind = 'gas' AND gallons IS NOT NULL`).first(),
+    env.roadtrip.prepare(
+      `SELECT b.id, b.title, b.emoji, b.note, b.date, b.created_at,
+              b.awarded_by, p.name AS awarded_by_name
+         FROM badge b LEFT JOIN person p ON p.id = b.awarded_by
+        ORDER BY b.created_at DESC`).all(),
+  ]);
+
+  const key = trips.results.length + ":" +
+    (trips.results.length ? trips.results[trips.results.length - 1].start_time : "") +
+    ":" + points.results.length;
+  if (!STATES_CACHE || STATES_CACHE.key !== key) {
+    const seen = {}; // state -> first local date
+    for (const t of trips.results) {
+      const day = localDate(t.start_time, t.time_zone || "-0500");
+      for (const [x, y] of thinnedTrack(t.gps, 60)) {
+        const st = stateOfPoint(x, y);
+        if (st && !(st in seen)) seen[st] = day;
+      }
+    }
+    const tz = trips.results.length
+      ? trips.results[trips.results.length - 1].time_zone || "-0500" : "-0500";
+    for (const p of points.results) {
+      const st = stateOfPoint(p.lon, p.lat);
+      if (st && !(st in seen)) seen[st] = localDate(p.ts, tz);
+    }
+    STATES_CACHE = {
+      key,
+      states: Object.entries(seen)
+        .map(([state, first_date]) => ({ state, first_date }))
+        .sort((a, b) => (a.first_date < b.first_date ? -1 : 1)),
+    };
+  }
+
+  const miles = mileage?.miles ?? 0;
+  return json({
+    states: STATES_CACHE.states,
+    parks: parks.results,
+    miles: { total: miles, earned: Math.floor(miles / 1000),
+             to_next: Math.round(1000 - (miles % 1000)) },
+    tanks: { fills: fills?.n ?? 0, earned: Math.floor((fills?.n ?? 0) / 10) },
+    bespoke: bespoke.results,
+  });
+}
+
+/** Award a bespoke badge. Deliberately NOT authors-only — this is the one
+    viewer write in the app (Andy's call, 2026-08-03): any of the six can
+    invent and award a badge. It writes nothing about location or the girls;
+    it is a gift mechanic. */
+export async function createBadge(env, person, body) {
+  if (!person) return json({ error: "unauthorized" }, 401);
+  if (!body.title || !body.title.trim()) return json({ error: "title required" }, 400);
+  const id = body.client_id || crypto.randomUUID();
+  await env.roadtrip.prepare(
+    `INSERT OR IGNORE INTO badge (id, title, emoji, note, date, awarded_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, body.title.trim().slice(0, 80),
+         (body.emoji || "").trim().slice(0, 8) || null,
+         (body.note || "").trim().slice(0, 500) || null,
+         body.date || null, person.id, nowIso()).run();
+  return json({ ok: true, id });
+}
+
+/** Remove a badge: its awarder, or any author (the girls can prune). */
+export async function deleteBadge(env, person, body) {
+  if (!person) return json({ error: "unauthorized" }, 401);
+  if (!body.id) return json({ error: "id required" }, 400);
+  const row = await env.roadtrip
+    .prepare(`SELECT awarded_by FROM badge WHERE id = ?`).bind(body.id).first();
+  if (!row) return json({ error: "not found" }, 404);
+  if (person.id !== row.awarded_by && person.role !== "author")
+    return json({ error: "not yours to remove" }, 403);
+  await env.roadtrip.prepare(`DELETE FROM badge WHERE id = ?`).bind(body.id).run();
+  return json({ ok: true });
+}
+
 /* ------------------------------------------------------------------ write */
 
 export async function createStop(env, person, body) {
@@ -381,10 +529,11 @@ export async function createJournal(env, person, body) {
   const id = body.client_id || crypto.randomUUID();
   await env.roadtrip.prepare(
     `INSERT OR IGNORE INTO journal_entry
-       (id, date, written_at, tz_offset, author_id, body, source, shared, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'app', ?, ?)`
+       (id, date, written_at, tz_offset, author_id, body, source, shared, lat, lon, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'app', ?, ?, ?, ?)`
   ).bind(id, date, at, offset, person.id, body.body.trim(),
-         body.shared === false ? 0 : 1, nowIso()).run();
+         body.shared === false ? 0 : 1,
+         body.lat ?? null, body.lon ?? null, nowIso()).run();
   return json({ ok: true, id });
 }
 

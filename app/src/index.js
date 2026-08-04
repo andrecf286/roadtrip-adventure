@@ -102,6 +102,11 @@ export default {
             : api.createJournal(env, person, body);
         case "/api/activity":    return api.toggleActivity(env, person, body);
         case "/api/visit":       return api.linkDayPlace(env, person, body, request.method);
+        case "/api/badges":      return api.badges(env);
+        case "/api/badge":
+          return request.method === "DELETE"
+            ? api.deleteBadge(env, person, body)
+            : api.createBadge(env, person, body);
         default:                 return json({ error: "not found" }, 404);
       }
     }

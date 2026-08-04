@@ -124,6 +124,7 @@ export const SHELL = String.raw`<!DOCTYPE html>
   <section class="screen" id="s-staying"></section>
   <section class="screen" id="s-journal"></section>
   <section class="screen" id="s-photos"></section>
+  <section class="screen" id="s-badges"></section>
 
   <div class="queued" id="queued"></div>
 
@@ -133,6 +134,7 @@ export const SHELL = String.raw`<!DOCTYPE html>
     <button data-tab="map"><span class="ic">&#128506;</span>Map</button>
     <button data-tab="journal"><span class="ic">&#9997;</span>Journal</button>
     <button data-tab="photos"><span class="ic">&#128247;</span>Photos</button>
+    <button data-tab="badges"><span class="ic">&#127941;</span>Badges</button>
     <button data-tab="places"><span class="ic">&#128204;</span>Plan</button>
   </nav>
 
@@ -206,9 +208,11 @@ function armDelete(kind, id, ev){
 }
 function doDelete(kind, id){
   ARMED = null;
-  var url = kind === "journal" ? "/api/journal" : "/api/stop";
+  var url = kind === "journal" ? "/api/journal" : (kind === "badge" ? "/api/badge" : "/api/stop");
   send(url, "DELETE", { id: id }).then(function(){
-    if (kind === "journal" || kind === "observation") loadJournal(); else tab("today");
+    if (kind === "journal" || kind === "observation") loadJournal();
+    else if (kind === "badge") loadBadges();
+    else tab("today");
   });
 }
 function delBtn(kind, id){
@@ -232,6 +236,7 @@ function tab(name){
   if(name==="map") loadMapScreen();
   if(name==="journal") loadJournal();
   if(name==="photos") loadPhotos();
+  if(name==="badges") loadBadges();
   if(name==="places") loadPlaces();
   // "map" is no longer a tab — it lives at the head of Trip and opens full
   // size from there via loadMapScreen().
@@ -467,12 +472,19 @@ function loadTrip(){
   get("/api/trip").then(function(d){
     if (!d) { offlineInto("s-trip", "loadTrip()"); return; }
     var past = d.days.map(function(x){
-      var bits=[]; if(x.places) bits.push(esc(x.places));
-      if(x.photos) bits.push(x.photos+" photo"+(x.photos===1?"":"s"));
-      if(x.stops) bits.push(x.stops+" stop"+(x.stops===1?"":"s"));
+      // The row tells the day's story: the stops themselves, in order, with
+      // their icons — not a count. Amelia's ask, verbatim: "what they did on
+      // each of the days (stops and locations) instead of just on the road."
+      var bits=[];
+      var sl = x.stop_list || [];
+      sl.slice(0, 4).forEach(function(s){
+        bits.push((ICON[s.kind]||"") + " " + esc(s.place || s.kind));
+      });
+      if (sl.length > 4) bits.push("+" + (sl.length - 4) + " more");
+      if (x.photos) bits.push(x.photos + " photo" + (x.photos===1?"":"s"));
       return '<div class="day" onclick="loadDay(\''+x.date+'\')">' +
         '<div class="daynum"><b>'+x.day_number+'</b><small>'+fmtShort(x.date)+'</small></div>' +
-        '<div style="flex:1"><div class="row"><b>'+esc(x.title||(x.places?x.places.split(", ")[0]:"On the road"))+
+        '<div style="flex:1"><div class="row"><b>'+esc(x.title||(x.places?x.places:"On the road"))+
         '</b><span class="tiny">'+(x.miles!=null?x.miles+" mi":"")+'</span></div>' +
         (bits.length?'<p class="tiny" style="margin:3px 0 0">'+bits.join(" &middot; ")+'</p>':'') +
         '</div></div>';
@@ -575,15 +587,36 @@ function tzOffset(){
   return sign + String(Math.floor(Math.abs(mins)/60)).padStart(2,"0") +
          String(Math.abs(mins)%60).padStart(2,"0");
 }
+/* Where the entry was written, from the phone, best-effort. 4s budget then
+   give up — a journal save must never hang on a permission prompt or a canyon
+   with no GPS. Backdated entries skip it entirely: the phone's position today
+   says nothing about where a past day's entry happened. */
+function withLocation(cb){
+  if (!navigator.geolocation) { cb(null); return; }
+  var done = false;
+  function finish(pos){ if (!done){ done = true; cb(pos); } }
+  navigator.geolocation.getCurrentPosition(
+    function(p){ finish({ lat: +p.coords.latitude.toFixed(5),
+                          lon: +p.coords.longitude.toFixed(5) }); },
+    function(){ finish(null); },
+    { timeout: 3500, maximumAge: 120000 });
+  setTimeout(function(){ finish(null); }, 4000);
+}
+
 function saveJournal(date){
   var t = el("j-body"); if(!t || !t.value.trim()) return;
   var body = t.value;
-  send("/api/journal","POST",{ body:body, date:date,
-       written_at:new Date().toISOString(), tz_offset:tzOffset() })
-    .then(function(r){
+  var today = new Date().toISOString().slice(0,10);
+  var go = function(loc){
+    var payload = { body:body, date:date,
+         written_at:new Date().toISOString(), tz_offset:tzOffset() };
+    if (loc) { payload.lat = loc.lat; payload.lon = loc.lon; }
+    send("/api/journal","POST",payload).then(function(r){
       if (!r || !r.ok) { alertInline(t, "Couldn't save — try again."); return; }
       loadDay(date);
     });
+  };
+  if (date === today) withLocation(go); else go(null);
 }
 /* A failed write used to re-render the list and silently discard what was
    typed. Keep the text, say what happened. */
@@ -627,11 +660,92 @@ function loadJournal(){
 
 function saveJournalFeed(){
   var t = el("jf-body"); if(!t || !t.value.trim()) return;
-  send("/api/journal","POST",{ body:t.value, written_at:new Date().toISOString(),
-       tz_offset:tzOffset() })
-    .then(function(r){
+  var body = t.value;
+  withLocation(function(loc){
+    var payload = { body:body, written_at:new Date().toISOString(), tz_offset:tzOffset() };
+    if (loc) { payload.lat = loc.lat; payload.lon = loc.lon; }
+    send("/api/journal","POST",payload).then(function(r){
       if (!r || !r.ok) { alertInline(t, "Couldn't save — try again."); return; }
       loadJournal();
+    });
+  });
+}
+
+/* --- Badges: what the trip has earned. States, parks and milestones are
+   DERIVED from the data (never stored); the bespoke ones are invented and
+   awarded by the family — the one write everyone can make, viewers included.
+   Amelia's design, near-verbatim. --- */
+function loadBadges(){
+  show("badges");
+  get("/api/badges").then(function(d){
+    if (!d) { offlineInto("s-badges", "loadBadges()"); return; }
+
+    var states = (d.states||[]).map(function(s){
+      return '<span class="badge">'+esc(s.state)+'<span style="opacity:.6;font-weight:400"> &middot; '+
+        fmtShort(s.first_date)+'</span></span>';
+    }).join("") || '<p class="empty">No states yet — that changes fast.</p>';
+
+    var parks = (d.parks||[]).map(function(p){
+      return '<span class="badge">&#127966; '+esc(p.name)+'<span style="opacity:.6;font-weight:400"> &middot; '+
+        fmtShort(p.first_date)+'</span></span>';
+    }).join("") || '<p class="empty">Parks appear when a day is marked at one.</p>';
+
+    var miles = "";
+    for (var i = 1; i <= d.miles.earned; i++)
+      miles += '<span class="badge">&#128739; '+(i*1000).toLocaleString()+' miles</span>';
+    miles += '<span class="badge" style="opacity:.55">'+d.miles.to_next.toLocaleString()+
+      ' mi to '+((d.miles.earned+1)*1000).toLocaleString()+'</span>';
+
+    var tanks = "";
+    for (var j = 1; j <= d.tanks.earned; j++)
+      tanks += '<span class="badge">&#9981; '+(j*10)+' tanks</span>';
+    tanks += '<span class="badge" style="opacity:.55">'+d.tanks.fills+' fill'+
+      (d.tanks.fills===1?"":"s")+' so far</span>';
+
+    var bespoke = (d.bespoke||[]).map(function(b){
+      // The awarder can always remove their own (delBtn is authors-only, and
+      // a viewer must be able to undo a mistaken award).
+      var mine = ME && (ME.id === b.awarded_by || ME.role === "author");
+      var rm = mine
+        ? '<button id="del-'+b.id+'" onclick="armDelete(\'badge\',\''+b.id+'\',event)" ' +
+          'style="border:0;background:none;font:inherit;font-size:12px;' +
+          'color:#a49a8e;cursor:pointer;padding:4px 0">Delete</button>'
+        : '<span></span>';
+      return '<div class="card"><div class="row"><b>'+(b.emoji?esc(b.emoji)+' ':'&#127941; ')+
+        esc(b.title)+'</b>'+rm+'</div>'+
+        (b.note?'<p style="margin:7px 0 0;font-size:14px;line-height:1.45">'+esc(b.note)+'</p>':'')+
+        '<p class="tiny" style="margin:6px 0 0">from '+esc(b.awarded_by_name||"someone")+
+        (b.date?' &middot; for '+fmtShort(b.date):'')+
+        ' &middot; '+fmtShort(b.created_at.slice(0,10))+'</p></div>';
+    }).join("");
+
+    el("s-badges").innerHTML =
+      '<h1>Badges</h1><p class="sub">'+(d.states||[]).length+' state'+
+      ((d.states||[]).length===1?"":"s")+' &middot; '+(d.parks||[]).length+' park'+
+      ((d.parks||[]).length===1?"":"s")+' &middot; '+d.miles.total.toLocaleString()+' miles</p>' +
+      '<h2>From the family</h2>' +
+      (bespoke || '<p class="empty">None yet. Anyone can award one &mdash; make one up.</p>') +
+      '<div class="card" style="margin-top:9px">' +
+        '<div class="row" style="gap:8px"><input type="text" id="bg-emoji" placeholder="&#127941;" ' +
+          'style="width:64px;flex:none;text-align:center">' +
+        '<input type="text" id="bg-title" placeholder="The Zotz Badge"></div>' +
+        '<textarea id="bg-note" style="min-height:64px;margin-top:8px" ' +
+          'placeholder="What earned it?"></textarea>' +
+        '<button class="ghostbtn" onclick="awardBadge()">Award it</button></div>' +
+      '<h2>States</h2><div class="badges">'+states+'</div>' +
+      '<h2>National parks</h2><div class="badges">'+parks+'</div>' +
+      '<h2>The odometer</h2><div class="badges">'+miles+'</div>' +
+      '<h2>The pump</h2><div class="badges">'+tanks+'</div>';
+  });
+}
+
+function awardBadge(){
+  var t = el("bg-title"); if (!t || !t.value.trim()) return;
+  send("/api/badge","POST",{ title:t.value, emoji:(el("bg-emoji")||{}).value||"",
+       note:(el("bg-note")||{}).value||"" })
+    .then(function(r){
+      if (!r || !r.ok) { alertInline(t, "Couldn't award — try again."); return; }
+      loadBadges();
     });
 }
 
