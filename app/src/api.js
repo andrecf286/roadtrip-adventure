@@ -14,6 +14,12 @@ const json = (obj, status = 200) =>
 
 const nowIso = () => new Date().toISOString();
 
+/** Client-minted ids go into DOM id= and onclick= attributes downstream, and
+    one of the writers (badge) is viewer-reachable — so an id is either a
+    plain slug or it gets replaced. Closes the QA audit's stored-XSS vector. */
+const safeId = (x) =>
+  (typeof x === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(x)) ? x : crypto.randomUUID();
+
 /** Local date for an instant given a '-0500'-style offset. */
 function localDate(iso, offset) {
   if (!iso) return null;
@@ -305,18 +311,21 @@ export async function reservation(env, id) {
 export async function map(env, person) {
   const [segments, gapPoints, stops, last, total, places, photos, journalPts] = await Promise.all([
     env.roadtrip.prepare(
-      `SELECT t.transaction_id, t.gps, t.gps_format, t.start_time
+      `SELECT t.transaction_id, t.gps, t.gps_format, t.start_time, t.distance
          FROM trips t, trip_meta m
         WHERE t.start_time >= m.trip_start_at AND t.gps IS NOT NULL
         ORDER BY t.start_time`).all(),
     // Webhook-inserted trips have NO polyline until the nightly sweep — which
     // read as large missing sections of the route for the whole afternoon.
-    // The live breadcrumbs cover exactly those trips; serve them as segments.
+    // And a trip's STORED polyline can itself be truncated (QA found trip
+    // 3045 reporting 238 mi with only ~78 mi of line — a 155-mile hole
+    // across Wisconsin). So: pull sampled breadcrumbs for EVERY post-boundary
+    // trip; JS below decides which trips actually need them.
     env.roadtrip.prepare(
       `SELECT tp.transaction_id, tp.lat, tp.lon
          FROM track_points tp
          JOIN trips t ON t.transaction_id = tp.transaction_id, trip_meta m
-        WHERE t.start_time >= m.trip_start_at AND t.gps IS NULL
+        WHERE t.start_time >= m.trip_start_at AND (tp.rowid % 4) = 0
         ORDER BY tp.transaction_id, tp.ts`).all(),
     env.roadtrip.prepare(
       `SELECT id, kind, place, lat, lon, occurred_at, date FROM stop
@@ -343,15 +352,34 @@ export async function map(env, person) {
   ]);
   // ~90 points per segment keeps the whole trip well under 100 KB even at
   // six weeks, and is indistinguishable at this zoom.
-  const tracks = segments.results
-    .map((s) => thinnedTrack(s.gps, 90))
-    .filter((t) => t.length > 1);
-
-  // Breadcrumb-built segments for the polyline-less trips, in trip order.
+  const pathMiles = (pts) => {
+    let mi = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const dx = (pts[i][0] - pts[i-1][0]) * 69 * Math.cos((pts[i][1] * Math.PI) / 180);
+      const dy = (pts[i][1] - pts[i-1][1]) * 69;
+      mi += Math.sqrt(dx * dx + dy * dy);
+    }
+    return mi;
+  };
   const byTrip = {};
   for (const p of gapPoints.results)
     (byTrip[p.transaction_id] = byTrip[p.transaction_id] || []).push([p.lon, p.lat]);
+
+  const tracks = [];
+  const covered = new Set();
+  for (const s of segments.results) {
+    const line = thinnedTrack(s.gps, 90);
+    if (line.length > 1) {
+      tracks.push(line);
+      // A polyline that draws at least ~70% of the trip's reported distance
+      // is trusted; a shorter one is truncated and gets its breadcrumbs too.
+      const claimed = s.distance ?? null;
+      if (claimed == null || claimed <= 0 || pathMiles(line) >= 0.7 * claimed)
+        covered.add(s.transaction_id);
+    }
+  }
   for (const id of Object.keys(byTrip)) {
+    if (covered.has(id)) continue;
     const t = thin(byTrip[id], 90);
     if (t.length > 1) tracks.push(t);
   }
@@ -381,7 +409,7 @@ export async function uploadPhoto(env, person, request) {
   const file = form.get("file"), thumb = form.get("thumb");
   if (!file || typeof file === "string") return json({ error: "file required" }, 400);
 
-  const id = (form.get("client_id") || crypto.randomUUID()).toString();
+  const id = safeId((form.get("client_id") || "").toString() || null);
   const takenAt = (form.get("taken_at") || nowIso()).toString();
   const offset = (form.get("tz_offset") || "-0500").toString();
   const date = localDate(takenAt, offset);
@@ -559,7 +587,7 @@ export async function badges(env) {
 export async function createBadge(env, person, body) {
   if (!person) return json({ error: "unauthorized" }, 401);
   if (!body.title || !body.title.trim()) return json({ error: "title required" }, 400);
-  const id = body.client_id || crypto.randomUUID();
+  const id = safeId(body.client_id);
   await env.roadtrip.prepare(
     `INSERT OR IGNORE INTO badge (id, title, emoji, note, date, awarded_by, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
@@ -592,7 +620,7 @@ export async function createStop(env, person, body) {
 
   const at = body.occurred_at || nowIso();
   const offset = body.tz_offset || "-0500";
-  const id = body.client_id || crypto.randomUUID();
+  const id = safeId(body.client_id);
 
   // INSERT OR IGNORE, keyed on the client-supplied id: the offline queue will
   // retry the same stop and must not create duplicates.
@@ -620,7 +648,7 @@ export async function updateStop(env, person, body) {
   if (cost == null && body.gallons != null && body.price_per_gallon != null) {
     cost = Math.round(body.gallons * body.price_per_gallon * 100) / 100;
   }
-  await env.roadtrip.prepare(
+  const r = await env.roadtrip.prepare(
     `UPDATE stop SET gallons = COALESCE(?, gallons),
                      price_per_gallon = COALESCE(?, price_per_gallon),
                      cost = COALESCE(?, cost),
@@ -628,6 +656,7 @@ export async function updateStop(env, person, body) {
       WHERE id = ?`
   ).bind(body.gallons ?? null, body.price_per_gallon ?? null, cost,
          body.note ?? null, body.place ?? null, body.id).run();
+  if (!r.meta.changes) return json({ error: "not found" }, 404);
   return json({ ok: true });
 }
 
@@ -640,7 +669,7 @@ export async function createJournal(env, person, body) {
   // Sunday. Without this the entry silently landed on today and vanished from
   // the screen the author was looking at.
   const date = body.date || localDate(at, offset);
-  const id = body.client_id || crypto.randomUUID();
+  const id = safeId(body.client_id);
   await env.roadtrip.prepare(
     `INSERT OR IGNORE INTO journal_entry
        (id, date, written_at, tz_offset, author_id, body, source, shared, lat, lon, created_at)
@@ -700,7 +729,8 @@ export async function linkDayPlace(env, person, body, method) {
 export async function deleteStop(env, person, body) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   if (!body.id) return json({ error: "id required" }, 400);
-  await env.roadtrip.prepare(`DELETE FROM stop WHERE id = ?`).bind(body.id).run();
+  const r = await env.roadtrip.prepare(`DELETE FROM stop WHERE id = ?`).bind(body.id).run();
+  if (!r.meta.changes) return json({ error: "not found" }, 404);
   return json({ ok: true });
 }
 
@@ -754,7 +784,8 @@ export async function photos(env) {
 export async function deleteJournal(env, person, body) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   if (!body.id) return json({ error: "id required" }, 400);
-  await env.roadtrip.prepare(`DELETE FROM journal_entry WHERE id = ?`).bind(body.id).run();
+  const r = await env.roadtrip.prepare(`DELETE FROM journal_entry WHERE id = ?`).bind(body.id).run();
+  if (!r.meta.changes) return json({ error: "not found" }, 404);
   return json({ ok: true });
 }
 
@@ -811,6 +842,23 @@ export async function track(env, q) {
       }
     }
     if (run.length > 1) tracks.push(run);
+  }
+
+  // Breadcrumbs in the viewport too — polyline-less trips (pre-sweep) and
+  // truncated polylines (QA's 155-mile Wisconsin hole) are invisible to the
+  // trips query, and zooming used to ERASE those miles from the screen
+  // because the detail response replaced the overview. Overdraw where a
+  // polyline also exists is harmless; a hole is not.
+  const crumbs = await env.roadtrip.prepare(
+    `SELECT transaction_id, lat, lon FROM track_points
+      WHERE lon >= ? AND lon <= ? AND lat >= ? AND lat <= ?
+      ORDER BY transaction_id, ts`).bind(w, e, s2, n).all();
+  const crumbTrips = {};
+  for (const p of crumbs.results)
+    (crumbTrips[p.transaction_id] = crumbTrips[p.transaction_id] || []).push([p.lon, p.lat]);
+  for (const id of Object.keys(crumbTrips)) {
+    const t = thin(crumbTrips[id], 400);
+    if (t.length > 1) tracks.push(t);
   }
 
   const total = tracks.reduce((a, t) => a + t.length, 0);

@@ -211,10 +211,16 @@ function doDelete(kind, id){
   var url = kind === "journal" ? "/api/journal"
     : kind === "badge" ? "/api/badge"
     : kind === "photo" ? "/api/photo" : "/api/stop";
+  // Re-render the screen the user is actually ON. Deleting a journal entry
+  // from a Day screen used to teleport them to the Journal tab with a stale
+  // nav highlight (QA finding) — the delete is an edit of the current view,
+  // not a navigation.
+  var day = el("s-day").classList.contains("on") && LAST_DAY;
   send(url, "DELETE", { id: id }).then(function(){
-    if (kind === "journal" || kind === "observation") loadJournal();
-    else if (kind === "badge") loadBadges();
-    else if (kind === "photo") loadPhotos();
+    if (day) loadDay(LAST_DAY);
+    else if (kind === "journal" || kind === "observation") tab("journal");
+    else if (kind === "badge") tab("badges");
+    else if (kind === "photo") tab("photos");
     else tab("today");
   });
 }
@@ -494,7 +500,7 @@ function loadTrip(){
     }).join("") || '<p class="empty">No days yet.</p>';
 
     var ahead = d.ahead.map(function(i){
-      return '<div class="day" style="opacity:.62" onclick="loadPlace(\''+i.id+'\')">' +
+      return '<div class="day" style="opacity:.62" onclick="loadPlace(\''+i.id+'\',\'trip\')">' +
         '<div class="daynum"><b>&middot;</b><small>'+(i.planned_arrival?fmtShort(i.planned_arrival):"&mdash;")+'</small></div>' +
         '<div style="flex:1"><div class="row"><b>'+esc(i.name)+'</b><span class="tiny">'+
         esc(i.drive_time_from_prev||"")+'</span></div><p class="tiny" style="margin:3px 0 0">'+
@@ -510,9 +516,12 @@ function loadTrip(){
   });
 }
 
+var LAST_DAY = null, LAST_PLACE = null;
 function loadDay(date){
   show("day");
+  LAST_DAY = date;
   get("/api/day?date="+encodeURIComponent(date)).then(function(d){
+    if (!d) { offlineInto("s-day", "loadDay('"+date+"')"); return; }
     var s = d.summary || {};
     var stops = d.stops.map(function(x){
       return '<div class="card"><div class="row"><span>'+(ICON[x.kind]||"")+' '+esc(x.kind)+
@@ -749,7 +758,20 @@ function loadBadges(){
 }
 
 function awardBadge(){
-  var t = el("bg-title"); if (!t || !t.value.trim()) return;
+  var t = el("bg-title"); if (!t) return;
+  // Amelia pressed Award with this box empty and NOTHING happened — a silent
+  // no-op reads as broken. Every tap gets a response now.
+  var old = t.parentNode.parentNode.querySelector("p.tiny[data-err]");
+  if (old) old.parentNode.removeChild(old);
+  if (!t.value.trim()) {
+    var msg = document.createElement("p");
+    msg.className = "tiny"; msg.setAttribute("data-err","1");
+    msg.style.color = "#a8332a"; msg.style.margin = "6px 0 0";
+    msg.textContent = "Give the badge a name first — the big box.";
+    t.parentNode.parentNode.appendChild(msg);
+    t.focus();
+    return;
+  }
   send("/api/badge","POST",{ title:t.value, emoji:(el("bg-emoji")||{}).value||"",
        note:(el("bg-note")||{}).value||"" })
     .then(function(r){
@@ -797,7 +819,11 @@ function loadPhotos(){
 
 function openPhoto(id, key, from){
   var p = PHOTO_META[id] || {};
-  var v = el("ph-viewer"); if (!v) { v = el("d-ph-viewer"); }
+  // Pick the viewer on the screen the user is LOOKING at — the Photos tab's
+  // viewer persists in its hidden DOM, and filling it from the Day screen
+  // opened the photo invisibly (QA finding).
+  var v = (from === "day") ? el("d-ph-viewer") : el("ph-viewer");
+  if (!v) v = el("ph-viewer") || el("d-ph-viewer");
   if (!v) return;
   v.innerHTML = '<div class="card" style="padding:8px">' +
     '<img src="/photo/'+esc(key)+'" style="width:100%;border-radius:10px;background:#eceae6">' +
@@ -937,12 +963,16 @@ function loadPlaces(){
   });
 }
 
-function loadPlace(id){
+var PLACE_FROM = "places";
+function loadPlace(id, from){
   show("place");
+  LAST_PLACE = id;
+  if (from) PLACE_FROM = from;
   get("/api/place?id="+encodeURIComponent(id)).then(function(d){
-    if (!d || !d.intention) {
+    if (!d) { offlineInto("s-place", "loadPlace('"+id+"')"); return; }
+    if (!d.intention) {
       el("s-place").innerHTML =
-        '<button class="back" onclick="tab(\'places\')">&larr;</button>' +
+        '<button class="back" onclick="tab(\''+PLACE_FROM+'\')">&larr;</button>' +
         '<h1>Not found</h1><p class="sub">That place is no longer in the plan.</p>';
       return;
     }
@@ -957,12 +987,12 @@ function loadPlace(id){
         (a.detail&&!a.done?'<span class="hers">'+esc(a.detail)+'</span>':'')+'</span></li>';
     }).join("");
     var res = d.reservations.map(function(r){
-      return '<div class="card tapme" onclick="loadRes(\''+r.id+'\')"><div class="row"><span>'+esc(r.name)+
+      return '<div class="card tapme" onclick="loadRes(\''+r.id+'\',\'place\')"><div class="row"><span>'+esc(r.name)+
         '</span><b>'+(r.cost!=null?'$'+r.cost.toFixed(2):'')+'</b></div>' +
         '<p class="tiny" style="margin:6px 0 0">'+(r.booked?'Booked':'Not booked')+'</p></div>';
     }).join("");
     el("s-place").innerHTML =
-      '<button class="back" onclick="tab(\'places\')">&larr;</button>' +
+      '<button class="back" onclick="tab(\''+PLACE_FROM+'\')">&larr;</button>' +
       '<h1>'+esc(i.name)+'</h1><p class="sub">' +
       (i.planned_arrival?'Hoped for '+fmtShort(i.planned_arrival):'No date') +
       (i.planned_nights?' &middot; '+i.planned_nights+' nights':'') +
@@ -977,9 +1007,13 @@ function tickActivity(id, done, placeId){
   send("/api/activity","POST",{ id:id, done:!!done }).then(function(){ loadPlace(placeId); });
 }
 
-function loadRes(id){
+var RES_BACK = "tab('today')";
+function loadRes(id, from){
   show("res");
+  RES_BACK = (from === "place" && LAST_PLACE)
+    ? "loadPlace('" + LAST_PLACE + "')" : "tab('today')";
   get("/api/reservation?id="+encodeURIComponent(id)).then(function(r){
+    if (!r || r.error) { offlineInto("s-res", "loadRes('"+id+"')"); return; }
     var kv = "";
     if(r.check_in_at)  kv += '<div class="kv"><span>Check in</span><b>'+esc(r.check_in_at)+'</b></div>';
     if(r.check_out_at) kv += '<div class="kv"><span>Check out</span><b>'+esc(r.check_out_at)+'</b></div>';
@@ -989,7 +1023,7 @@ function loadRes(id){
     kv += '<div class="kv"><span>Booked</span><b>'+(r.booked?"Yes":"Not yet")+'</b></div>';
     if(r.cancel_by)    kv += '<div class="kv"><span>Cancel by</span><b>'+esc(r.cancel_by)+'</b></div>';
     el("s-res").innerHTML =
-      '<button class="back" onclick="tab(\'today\')">&larr;</button>' +
+      '<button class="back" onclick="'+RES_BACK+'">&larr;</button>' +
       '<h1>'+esc(r.name)+'</h1><p class="sub">'+esc(r.place_name||"")+'</p>' +
       '<div class="card" style="padding:4px 14px">'+kv+'</div>' +
       (r.notes ? '<h2>Her notes</h2><div class="card"><p class="hers" style="margin:0;font-size:14.5px;line-height:1.5">'+
@@ -1183,11 +1217,11 @@ function basemapOverlays(map, d){
     popupAt(f.geometry.coordinates,
       '<b>'+esc(f.properties.name)+'</b><br>' +
       '<button class="ghostbtn" style="margin-top:6px" ' +
-        'onclick="loadPlace(\''+esc(f.properties.id)+'\')">Open the plan</button>');
+        'onclick="loadPlace(\''+esc(f.properties.id)+'\',\'map\')">Open the plan</button>');
   });
   map.on("click", "place-labels", function(e){
     var f = e.features[0];
-    loadPlace(f.properties.id);
+    loadPlace(f.properties.id, "map");
   });
   map.on("click", "stop-dots", function(e){
     var f = e.features[0], pr = f.properties;
