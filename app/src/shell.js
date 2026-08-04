@@ -334,6 +334,18 @@ function loadToday(){
     var kinds = ["gas","food","campsite","lodging","event","journal"];
     var KLABEL = { gas:"Gas", food:"Food", campsite:"Campsite", lodging:"Lodging",
                    event:"Event", journal:"Journal" };
+    // A fresh recording leaves a five-minute undo on Today — the back button
+    // was the silent escape path that left Lily's test taps recorded.
+    var undo = "";
+    if (LAST_REC && Date.now() - new Date(LAST_REC.at).getTime() < 5*60000) {
+      undo = '<div class="card" style="margin-top:10px"><div class="row">' +
+        '<span class="tiny">'+(ICON[LAST_REC.kind]||"")+' '+
+        LAST_REC.kind.charAt(0).toUpperCase()+LAST_REC.kind.slice(1)+
+        ' recorded '+fmtTime(LAST_REC.at)+'</span>' +
+        '<button class="ghostbtn" id="undo-stop" style="margin:0;padding:4px 14px" ' +
+          'onclick="armUndoStop()">Undo</button></div></div>';
+    } else if (LAST_REC) LAST_REC = null;
+
     var grid = (ME && ME.role==="author")
       ? '<div class="grid" style="margin-top:14px">' + kinds.map(function(k){
           var act = k === "journal" ? "openJot()" : "saveStop(\'"+k+"\')";
@@ -345,7 +357,7 @@ function loadToday(){
     el("s-today").innerHTML =
       '<h1 style="font-size:19px;line-height:1.35">'+l1+'</h1>' +
       '<p class="sub">'+l2+'</p>' +
-      grid + tonight + last;
+      undo + grid + tonight + last;
   });
 }
 
@@ -391,6 +403,16 @@ function openStop(){
 }
 
 function saveStop(kind){
+  // The Today grid calls this directly, and the saved screen was rendering
+  // into a HIDDEN section — a tap that visibly did nothing. That silence is
+  // what eleven of Lily's taps looked like. Switch screens IMMEDIATELY with
+  // an interim state; the saved screen replaces it when the fix (or the 5s
+  // latch) lands.
+  show("stop");
+  el("s-stop").innerHTML =
+    '<div style="text-align:center;padding-top:120px"><div style="font-size:52px">'+(ICON[kind]||"")+'</div>' +
+    '<h1 style="margin-top:14px">Recording&hellip;</h1>' +
+    '<p class="sub">Getting a fix on where you are</p></div>';
   var id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
   var mins = -new Date().getTimezoneOffset();
   var sign = mins < 0 ? "-" : "+";
@@ -426,14 +448,22 @@ function saveStop(kind){
       '<p class="sub">'+fmtTime(item.occurred_at)+'</p></div>' +
       '<h2>Add anything? (optional)</h2>' + extra +
       '<div class="actionbar"><button class="bigbtn" onclick="finishStop(\''+id+'\')">Done</button>' +
-      '<button class="ghostbtn" style="color:#a8332a;border-color:#e8cdc9" onclick="discardStop(\''+id+'\')">Discard this stop</button></div>';
+      '<button class="ghostbtn" id="disc-btn" style="color:#a8332a;border-color:#e8cdc9" ' +
+        'onclick="armDiscard(\''+id+'\')">Discard this stop</button></div>';
+    LAST_REC = { id: id, kind: kind, at: item.occurred_at };
   }
 
+  // Latched: an unanswered permission prompt fires NEITHER callback, and a
+  // stop must never hang on one — record after 5s regardless. The server
+  // fills a missing position from the car's freshest breadcrumb anyway.
+  var done = false;
+  function finishOnce(){ if (!done){ done = true; finish(); } }
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(function(p){
-      item.lat = p.coords.latitude; item.lon = p.coords.longitude; finish();
-    }, finish, { timeout: 4000, maximumAge: 60000 });
-  } else finish();
+      item.lat = p.coords.latitude; item.lon = p.coords.longitude; finishOnce();
+    }, finishOnce, { timeout: 4000, maximumAge: 60000 });
+    setTimeout(finishOnce, 5000);
+  } else finishOnce();
 }
 
 function calcFuel(){
@@ -446,10 +476,53 @@ function calcFuel(){
 /* A stop saves on the first tap, which is what makes it fast enough to use at
    a pump — so a mis-tap is inevitable and there has to be a way out. Clears the
    offline queue entry too, in case it never reached the server. */
+/* Undo-with-confirm, Andy's ask after Lily's eleven exploratory taps: every
+   path away from a fresh recording gets a way back, and every way back asks
+   once. Same arm-then-commit shape as delete — no browser confirm() ever. */
+var LAST_REC = null, DISC_ARMED = null;
+
+function armDiscard(id){
+  var b = el("disc-btn");
+  if (DISC_ARMED === id) { discardStop(id); return; }
+  DISC_ARMED = id;
+  if (b) { b.textContent = "Really discard?"; b.style.fontWeight = "700"; }
+  setTimeout(function(){
+    if (DISC_ARMED === id) {
+      DISC_ARMED = null;
+      var bb = el("disc-btn");
+      if (bb) { bb.textContent = "Discard this stop"; bb.style.fontWeight = ""; }
+    }
+  }, 4000);
+}
+
 function discardStop(id){
+  DISC_ARMED = null;
+  if (LAST_REC && LAST_REC.id === id) LAST_REC = null;
   var q = queue().filter(function(x){ return x.client_id !== id; });
   setQueue(q);
+  // 404 here just means the stop was still queued and never reached the
+  // server — removing it from the queue was the whole deletion.
   send("/api/stop","DELETE",{ id:id }).then(function(){ tab("today"); }, function(){ tab("today"); });
+}
+
+var UNDO_ARMED = false;
+function armUndoStop(){
+  var b = el("undo-stop"); if (!b || !LAST_REC) return;
+  if (UNDO_ARMED) {
+    UNDO_ARMED = false;
+    var id = LAST_REC.id; LAST_REC = null;
+    var q = queue().filter(function(x){ return x.client_id !== id; });
+    setQueue(q);
+    send("/api/stop","DELETE",{ id:id }).then(function(){ loadToday(); }, function(){ loadToday(); });
+    return;
+  }
+  UNDO_ARMED = true;
+  b.textContent = "Undo?"; b.style.color = "#a8332a"; b.style.fontWeight = "700";
+  setTimeout(function(){
+    UNDO_ARMED = false;
+    var bb = el("undo-stop");
+    if (bb) { bb.textContent = "Undo"; bb.style.color = ""; bb.style.fontWeight = ""; }
+  }, 4000);
 }
 
 /* Patch a stop that may not have reached the server yet.
