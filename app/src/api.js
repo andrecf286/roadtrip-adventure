@@ -634,12 +634,42 @@ function stateOfPoint(x, y) {
 }
 
 /** Normalized outline(s) for a state badge: up to 3 rings (Michigan needs
-    both peninsulas), evenly thinned, projected into a 0..100 box with
-    latitude-corrected aspect. The badge IS the state's shape. */
+    both peninsulas), projected into a 0..100 box with latitude-corrected
+    aspect. The badge IS the state's shape — so simplification must be
+    SHAPE-preserving (Douglas-Peucker), not the payload thinner: even
+    sampling shaved Minnesota's arrowhead and Ohio's lakeshore. */
+function rdpOpen(pts, eps) {
+  if (pts.length < 3) return pts;
+  let dmax = 0, idx = 0;
+  const [x1, y1] = pts[0], [x2, y2] = pts[pts.length - 1];
+  const dx = x2 - x1, dy = y2 - y1, norm = Math.hypot(dx, dy) || 1e-12;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = Math.abs(dy * pts[i][0] - dx * pts[i][1] + x2 * y1 - y2 * x1) / norm;
+    if (d > dmax) { dmax = d; idx = i; }
+  }
+  if (dmax > eps) {
+    const a = rdpOpen(pts.slice(0, idx + 1), eps), b = rdpOpen(pts.slice(idx), eps);
+    return a.slice(0, -1).concat(b);
+  }
+  return [pts[0], pts[pts.length - 1]];
+}
+function rdpRingBadge(ring, target) {
+  // Closed ring: a degenerate chord collapses plain RDP, so split at the
+  // midpoint. Tighten tolerance-first: start fine, coarsen until it fits.
+  let eps = 0.015, out = ring;
+  for (let tries = 0; tries < 8; tries++) {
+    const mid = Math.floor(ring.length / 2);
+    const a = rdpOpen(ring.slice(0, mid + 1), eps), b = rdpOpen(ring.slice(mid), eps);
+    out = a.slice(0, -1).concat(b);
+    if (out.length <= target) break;
+    eps *= 1.7;
+  }
+  return out;
+}
 function stateShape(name) {
   const sp = STATE_POLYS.find((s) => s.n === name);
   if (!sp) return null;
-  const rings = sp.r.slice(0, 3).map((r) => thin(r, 50));
+  const rings = sp.r.slice(0, 3).map((r) => rdpRingBadge(r, 80));
   let la0 = 90, la1 = -90, lo0 = 180, lo1 = -180;
   for (const r of rings) for (const [x, y] of r) {
     if (y < la0) la0 = y; if (y > la1) la1 = y;
