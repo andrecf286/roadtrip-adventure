@@ -302,15 +302,24 @@ export async function reservation(env, id) {
 
 /* -------------------------------------------------------------------- map */
 
-export async function map(env) {
-  const [segments, stops, last, total, places] = await Promise.all([
+export async function map(env, person) {
+  const [segments, gapPoints, stops, last, total, places, photos, journalPts] = await Promise.all([
     env.roadtrip.prepare(
       `SELECT t.transaction_id, t.gps, t.gps_format, t.start_time
          FROM trips t, trip_meta m
         WHERE t.start_time >= m.trip_start_at AND t.gps IS NOT NULL
         ORDER BY t.start_time`).all(),
+    // Webhook-inserted trips have NO polyline until the nightly sweep — which
+    // read as large missing sections of the route for the whole afternoon.
+    // The live breadcrumbs cover exactly those trips; serve them as segments.
     env.roadtrip.prepare(
-      `SELECT id, kind, place, lat, lon, occurred_at FROM stop
+      `SELECT tp.transaction_id, tp.lat, tp.lon
+         FROM track_points tp
+         JOIN trips t ON t.transaction_id = tp.transaction_id, trip_meta m
+        WHERE t.start_time >= m.trip_start_at AND t.gps IS NULL
+        ORDER BY tp.transaction_id, tp.ts`).all(),
+    env.roadtrip.prepare(
+      `SELECT id, kind, place, lat, lon, occurred_at, date FROM stop
         WHERE lat IS NOT NULL AND lon IS NOT NULL ORDER BY occurred_at`).all(),
     env.roadtrip.prepare(`SELECT lat, lon, ts FROM track_points ORDER BY ts DESC LIMIT 1`).first(),
     env.roadtrip.prepare(`SELECT * FROM v_trip_mileage`).first(),
@@ -318,6 +327,19 @@ export async function map(env) {
     env.roadtrip.prepare(
       `SELECT id, seq, name, lat, lon FROM intention
         WHERE lat IS NOT NULL AND dropped = 0 ORDER BY seq`).all(),
+    // Located photos and journal entries: every event on the map, tappable.
+    env.roadtrip.prepare(
+      `SELECT id, thumb_key, date, lat, lon FROM photo
+        WHERE lat IS NOT NULL AND lon IS NOT NULL ORDER BY taken_at`).all(),
+    // Same share-flag read filter as journal(): a private entry's location
+    // pin would leak the entry's existence to a viewer.
+    env.roadtrip.prepare(
+      `SELECT j.id, j.date, j.lat, j.lon, substr(j.body, 1, 120) AS excerpt,
+              p.name AS author
+         FROM journal_entry j LEFT JOIN person p ON p.id = j.author_id
+        WHERE j.lat IS NOT NULL AND j.lon IS NOT NULL
+          AND (j.shared = 1 OR j.author_id = ?)
+        ORDER BY j.written_at`).bind(person?.id ?? "").all(),
   ]);
   // ~90 points per segment keeps the whole trip well under 100 KB even at
   // six weeks, and is indistinguishable at this zoom.
@@ -325,13 +347,105 @@ export async function map(env) {
     .map((s) => thinnedTrack(s.gps, 90))
     .filter((t) => t.length > 1);
 
+  // Breadcrumb-built segments for the polyline-less trips, in trip order.
+  const byTrip = {};
+  for (const p of gapPoints.results)
+    (byTrip[p.transaction_id] = byTrip[p.transaction_id] || []).push([p.lon, p.lat]);
+  for (const id of Object.keys(byTrip)) {
+    const t = thin(byTrip[id], 90);
+    if (t.length > 1) tracks.push(t);
+  }
+
   return json({
     tracks,
     stops: stops.results,
     current: last || null,
     miles: total?.miles ?? 0,
     places: places.results,
+    photos: photos.results,
+    journal: journalPts.results,
   });
+}
+
+/* ----------------------------------------------------------------- photos */
+
+/** Upload one photo: multipart form with `file` (resized JPEG), `thumb`
+    (small JPEG), and metadata fields. The client resizes BEFORE upload —
+    campground wifi carries ~300KB, not a 12MP original. sha256 dedupes
+    retries at the DB layer; the R2 keys are content-addressed by photo id. */
+export async function uploadPhoto(env, person, request) {
+  if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
+  let form;
+  try { form = await request.formData(); }
+  catch { return json({ error: "multipart form required" }, 400); }
+  const file = form.get("file"), thumb = form.get("thumb");
+  if (!file || typeof file === "string") return json({ error: "file required" }, 400);
+
+  const id = (form.get("client_id") || crypto.randomUUID()).toString();
+  const takenAt = (form.get("taken_at") || nowIso()).toString();
+  const offset = (form.get("tz_offset") || "-0500").toString();
+  const date = localDate(takenAt, offset);
+  const lat = form.get("lat") ? Number(form.get("lat")) : null;
+  const lon = form.get("lon") ? Number(form.get("lon")) : null;
+  const sha = (form.get("sha256") || "").toString() || null;
+
+  // Same photo re-sent by a retry: point at the existing row, upload nothing.
+  if (sha) {
+    const dupe = await env.roadtrip
+      .prepare(`SELECT id FROM photo WHERE sha256 = ?`).bind(sha).first();
+    if (dupe) return json({ ok: true, id: dupe.id, dupe: true });
+  }
+
+  const key = "photos/" + date + "/" + id + ".jpg";
+  const thumbKey = "thumbs/" + id + ".jpg";
+  await env.PHOTOS.put(key, file.stream(), {
+    httpMetadata: { contentType: "image/jpeg" } });
+  if (thumb && typeof thumb !== "string")
+    await env.PHOTOS.put(thumbKey, thumb.stream(), {
+      httpMetadata: { contentType: "image/jpeg" } });
+
+  await env.roadtrip.prepare(
+    `INSERT OR IGNORE INTO photo
+       (id, date, taken_at, tz_offset, lat, lon, r2_key, thumb_key,
+        width, height, mime, sha256, caption, author_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'image/jpeg', ?, ?, ?, ?)`
+  ).bind(id, date, takenAt, offset, lat, lon, key,
+         (thumb && typeof thumb !== "string") ? thumbKey : null,
+         form.get("width") ? Number(form.get("width")) : null,
+         form.get("height") ? Number(form.get("height")) : null,
+         sha, (form.get("caption") || "").toString().slice(0, 300) || null,
+         person.id, nowIso()).run();
+  return json({ ok: true, id });
+}
+
+/** Serve a photo or thumb out of R2. Session-gated like everything else —
+    these are pictures of two teenagers' trip, never public URLs. */
+export async function servePhoto(env, path) {
+  const key = path.replace(/^\/photo\//, "");
+  if (!/^(photos|thumbs)\//.test(key)) return json({ error: "bad key" }, 400);
+  const obj = await env.PHOTOS.get(key);
+  if (!obj) return json({ error: "not found" }, 404);
+  return new Response(obj.body, {
+    headers: {
+      "content-type": obj.httpMetadata?.contentType || "image/jpeg",
+      // Private (cookie-gated) but immutable per key — the phone caches it.
+      "cache-control": "private, max-age=31536000, immutable",
+    },
+  });
+}
+
+/** Remove a photo (any author, same rule as journal deletes): DB row first,
+    then both R2 objects — a dangling object is better than a dangling row. */
+export async function deletePhoto(env, person, body) {
+  if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
+  if (!body.id) return json({ error: "id required" }, 400);
+  const row = await env.roadtrip
+    .prepare(`SELECT r2_key, thumb_key FROM photo WHERE id = ?`).bind(body.id).first();
+  if (!row) return json({ error: "not found" }, 404);
+  await env.roadtrip.prepare(`DELETE FROM photo WHERE id = ?`).bind(body.id).run();
+  await env.PHOTOS.delete(row.r2_key);
+  if (row.thumb_key) await env.PHOTOS.delete(row.thumb_key);
+  return json({ ok: true });
 }
 
 /* ----------------------------------------------------------------- badges */

@@ -74,6 +74,17 @@ export default {
     /* --------------------------- everything below needs a session -------- */
     const person = await currentPerson(request, env);
 
+    /* Photo bytes and the multipart upload live OUTSIDE the JSON-body parse:
+       reading request.json() would consume the multipart stream. */
+    if (path.startsWith("/photo/")) {
+      if (!person) return json({ error: "unauthorized" }, 401);
+      return api.servePhoto(env, path);
+    }
+    if (path === "/api/photo/upload") {
+      if (!person) return json({ error: "unauthorized" }, 401);
+      return api.uploadPhoto(env, person, request);
+    }
+
     if (path.startsWith("/api/")) {
       if (!person) return json({ error: "unauthorized" }, 401);
       const body = ["POST", "PATCH", "DELETE"].includes(request.method)
@@ -89,7 +100,7 @@ export default {
         case "/api/journal-feed": return api.journal(env, person);
         case "/api/photos":      return api.photos(env);
         case "/api/reservation": return api.reservation(env, url.searchParams.get("id"));
-        case "/api/map":         return api.map(env);
+        case "/api/map":         return api.map(env, person);
         case "/api/track":       return api.track(env, url.searchParams);
         case "/api/stop":
           if (request.method === "DELETE") return api.deleteStop(env, person, body);
@@ -103,6 +114,9 @@ export default {
         case "/api/activity":    return api.toggleActivity(env, person, body);
         case "/api/visit":       return api.linkDayPlace(env, person, body, request.method);
         case "/api/badges":      return api.badges(env);
+        case "/api/photo":
+          if (request.method === "DELETE") return api.deletePhoto(env, person, body);
+          return json({ error: "use /api/photo/upload" }, 400);
         case "/api/badge":
           return request.method === "DELETE"
             ? api.deleteBadge(env, person, body)

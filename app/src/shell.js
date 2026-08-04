@@ -208,10 +208,13 @@ function armDelete(kind, id, ev){
 }
 function doDelete(kind, id){
   ARMED = null;
-  var url = kind === "journal" ? "/api/journal" : (kind === "badge" ? "/api/badge" : "/api/stop");
+  var url = kind === "journal" ? "/api/journal"
+    : kind === "badge" ? "/api/badge"
+    : kind === "photo" ? "/api/photo" : "/api/stop";
   send(url, "DELETE", { id: id }).then(function(){
     if (kind === "journal" || kind === "observation") loadJournal();
     else if (kind === "badge") loadBadges();
+    else if (kind === "photo") loadPhotos();
     else tab("today");
   });
 }
@@ -539,6 +542,12 @@ function loadDay(date){
         '<div class="stat"><span>'+(s.photos||0)+'</span><small>photos</small></div>' +
         '<div class="stat"><span>'+d.segments.length+'</span><small>drives</small></div>' +
       '</div>' +
+      ((d.photos||[]).length
+        ? '<h2>Photos</h2><div id="d-ph-viewer"></div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">' +
+          d.photos.map(function(p){ PHOTO_META[p.id] = p; return photoThumbHtml(p, "day"); }).join("") +
+          '</div>'
+        : '') +
       '<h2>Places</h2>' + (placeRows || '<p class="empty">No place marked for this day.</p>') +
       (ME && ME.role==="author"
         ? '<button class="ghostbtn" onclick="openPlacePicker(\''+date+'\')">Mark a place for this day</button>' +
@@ -749,23 +758,165 @@ function awardBadge(){
     });
 }
 
+/* ---- Photos: straight from the camera roll. The phone resizes before
+   upload (campground wifi carries ~300KB, not a 12MP original), EXIF GPS
+   rides along when the photo has one, and the whole trip so far backfills
+   the moment somebody selects it. ---- */
+
+function photoThumbHtml(p, from){
+  var src = p.thumb_key ? "/photo/"+p.thumb_key : "/photo/"+p.r2_key;
+  return '<img class="thumb" loading="lazy" src="'+esc(src)+'" ' +
+    'style="width:100%;height:112px;border-radius:10px;object-fit:cover;cursor:pointer;background:#eceae6" ' +
+    'onclick="openPhoto(\''+esc(p.id)+'\',\''+esc(p.r2_key)+'\',\''+(from||"photos")+'\')">';
+}
+
+var PHOTO_META = {};
 function loadPhotos(){
   show("photos");
   get("/api/photos").then(function(d){
     if (!d) { offlineInto("s-photos", "loadPhotos()"); return; }
-    var grid = d.photos.map(function(p){
-      return '<div class="thumb" style="width:100%;height:112px;border-radius:10px"></div>';
-    }).join("");
+    PHOTO_META = {};
+    d.photos.forEach(function(p){ PHOTO_META[p.id] = p; });
+    var grid = d.photos.map(function(p){ return photoThumbHtml(p, "photos"); }).join("");
+    var uploader = (ME && ME.role === "author")
+      ? '<input type="file" id="ph-files" accept="image/*" multiple style="display:none" ' +
+          'onchange="uploadPhotos(this.files)">' +
+        '<div class="actionbar"><button class="bigbtn" ' +
+          'onclick="el(\'ph-files\').click()">Add photos</button></div>' +
+        '<div id="ph-progress"></div>'
+      : '';
     el("s-photos").innerHTML = '<h1>Photos</h1><p class="sub">' +
       (d.photos.length ? d.photos.length + ' so far' : 'None yet') + '</p>' +
+      '<div id="ph-viewer"></div>' +
       (d.photos.length
         ? '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">' + grid + '</div>'
-        : '<div class="card"><p style="margin:0;font-size:15px;line-height:1.5">' +
-          'Nothing here yet — the upload path is not built.</p>' +
-          '<p class="tiny" style="margin:9px 0 0">Every photo they have already taken is safe on their phones ' +
-          'with its location and timestamp intact, so nothing is being lost while this waits. ' +
-          'When it is wired up, the whole trip backfills at once.</p></div>');
+        : '<p class="empty">Tap Add photos and pick from the camera roll — the whole trip so far, all at once, is fine.</p>') +
+      uploader;
   });
+}
+
+function openPhoto(id, key, from){
+  var p = PHOTO_META[id] || {};
+  var v = el("ph-viewer"); if (!v) { v = el("d-ph-viewer"); }
+  if (!v) return;
+  v.innerHTML = '<div class="card" style="padding:8px">' +
+    '<img src="/photo/'+esc(key)+'" style="width:100%;border-radius:10px;background:#eceae6">' +
+    '<div class="row" style="margin-top:8px"><span class="tiny">' +
+      esc(p.author||"") + (p.taken_at ? ' &middot; '+fmtTime(p.taken_at) : '') +
+      (p.date ? ' &middot; '+fmtShort(p.date) : '') + '</span>' +
+    '<span>' +
+      (p.lat != null ? '<button class="ghostbtn" style="margin:0;padding:4px 10px" ' +
+        'onclick="tab(\'map\')">On the map</button> ' : '') +
+      (ME && ME.role === "author"
+        ? '<button id="del-'+esc(id)+'" onclick="armDelete(\'photo\',\''+esc(id)+'\',event)" ' +
+          'style="border:0;background:none;font:inherit;font-size:12px;color:#a49a8e;' +
+          'cursor:pointer;padding:4px 0">Delete</button>' : '') +
+    '</span></div>' +
+    '<button class="ghostbtn" onclick="this.parentNode.parentNode.innerHTML=\'\'">Close</button></div>';
+  v.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* Minimal EXIF walk: JPEG APP1 -> TIFF -> GPS IFD. Returns {lat, lon,
+   taken_at} with any of them possibly missing. Wrong-endian, truncated, or
+   EXIF-less files just return {} — the photo still uploads, merely unpinned. */
+function exifGps(buf){
+  try {
+    var v = new DataView(buf);
+    if (v.getUint16(0) !== 0xFFD8) return {};
+    var o = 2;
+    while (o + 4 < v.byteLength) {
+      var marker = v.getUint16(o), size = v.getUint16(o + 2);
+      if (marker === 0xFFE1) break;
+      if ((marker & 0xFF00) !== 0xFF00) return {};
+      o += 2 + size;
+    }
+    if (o + 4 >= v.byteLength) return {};
+    var t = o + 4 + 6; // past APP1 size + "Exif\0\0"
+    var little = v.getUint16(t) === 0x4949;
+    function u16(p){ return v.getUint16(p, little); }
+    function u32(p){ return v.getUint32(p, little); }
+    function rational(p){ var n = u32(p), d = u32(p + 4); return d ? n / d : 0; }
+    function ifdEntries(p, fn){
+      var n = u16(p);
+      for (var i = 0; i < n; i++) fn(p + 2 + i * 12);
+    }
+    var gpsOff = 0, exifOff = 0, out = {};
+    ifdEntries(t + u32(t + 4), function(e){
+      var tag = u16(e);
+      if (tag === 0x8825) gpsOff = u32(e + 8);
+      if (tag === 0x8769) exifOff = u32(e + 8);
+    });
+    if (exifOff) ifdEntries(t + exifOff, function(e){
+      if (u16(e) === 0x9003) { // DateTimeOriginal "YYYY:MM:DD HH:MM:SS"
+        var p = t + u32(e + 8), s = "";
+        for (var i = 0; i < 19; i++) s += String.fromCharCode(v.getUint8(p + i));
+        var m = s.match(/^(\d{4}):(\d\d):(\d\d) (\d\d:\d\d:\d\d)$/);
+        if (m) out.taken_local = m[1]+"-"+m[2]+"-"+m[3]+"T"+m[4];
+      }
+    });
+    if (gpsOff) {
+      var latRef = "N", lonRef = "E", lat = null, lon = null;
+      ifdEntries(t + gpsOff, function(e){
+        var tag = u16(e), p = t + u32(e + 8);
+        if (tag === 1) latRef = String.fromCharCode(v.getUint8(e + 8));
+        if (tag === 3) lonRef = String.fromCharCode(v.getUint8(e + 8));
+        if (tag === 2) lat = rational(p) + rational(p+8)/60 + rational(p+16)/3600;
+        if (tag === 4) lon = rational(p) + rational(p+8)/60 + rational(p+16)/3600;
+      });
+      if (lat != null && lon != null && (lat || lon)) {
+        out.lat = +( (latRef === "S" ? -lat : lat).toFixed(5) );
+        out.lon = +( (lonRef === "W" ? -lon : lon).toFixed(5) );
+      }
+    }
+    return out;
+  } catch (e) { return {}; }
+}
+
+function scaleToBlob(img, maxDim, quality){
+  var w = img.width, h = img.height;
+  var k = Math.min(1, maxDim / Math.max(w, h));
+  var c = document.createElement("canvas");
+  c.width = Math.round(w * k); c.height = Math.round(h * k);
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  return new Promise(function(res){ c.toBlob(res, "image/jpeg", quality); });
+}
+
+function uploadPhotos(files){
+  var list = Array.prototype.slice.call(files || []);
+  if (!list.length) return;
+  var prog = el("ph-progress"), done = 0, failed = 0;
+  function note(){
+    if (prog) prog.innerHTML = '<p class="tiny">'+done+' of '+list.length+' uploaded'+
+      (failed ? ' &middot; '+failed+' failed (tap Add photos to retry those)' : '')+'</p>';
+  }
+  note();
+  // Sequential on purpose: three parallel 300KB uploads on one bar of LTE
+  // starve each other; one at a time finishes sooner and reports honestly.
+  (function next(){
+    var f = list.shift();
+    if (!f) { done && loadPhotos(); return; }
+    f.arrayBuffer().then(function(buf){
+      var meta = exifGps(buf);
+      return createImageBitmap(new Blob([buf]), { imageOrientation: "from-image" })
+        .then(function(img){
+          return Promise.all([scaleToBlob(img, 1800, 0.82), scaleToBlob(img, 420, 0.75)]);
+        })
+        .then(function(blobs){
+          var fd = new FormData();
+          fd.append("file", blobs[0], "p.jpg");
+          fd.append("thumb", blobs[1], "t.jpg");
+          fd.append("tz_offset", tzOffset());
+          // EXIF local time + the phone's offset beats file mtime; mtime beats now.
+          fd.append("taken_at", meta.taken_local
+            ? meta.taken_local + tzOffset().replace(/(\d\d)(\d\d)/, "$1:$2")
+            : new Date(f.lastModified || Date.now()).toISOString());
+          if (meta.lat != null) { fd.append("lat", meta.lat); fd.append("lon", meta.lon); }
+          return fetch("/api/photo/upload", { method: "POST", credentials: "same-origin", body: fd })
+            .then(function(r){ return r.json(); });
+        })
+        .then(function(r){ if (r && r.ok) done++; else failed++; note(); next(); });
+    }).catch(function(){ failed++; note(); next(); });
+  })();
 }
 
 function loadPlaces(){
@@ -983,7 +1134,7 @@ function basemapOverlays(map, d){
     paint:{ "line-color":"#1f6f5c", "line-width":3 } });
 
   // Itinerary places: dots always, names once you're close enough to care.
-  map.addSource("places", { type:"geojson", data: feats(d.places||[], function(p){ return { name:p.name }; }) });
+  map.addSource("places", { type:"geojson", data: feats(d.places||[], function(p){ return { name:p.name, id:p.id }; }) });
   map.addLayer({ id:"place-dots", type:"circle", source:"places",
     paint:{ "circle-radius":4, "circle-color":"#4a6fa5",
             "circle-stroke-color":"#ffffff", "circle-stroke-width":1.3 } });
@@ -992,10 +1143,80 @@ function basemapOverlays(map, d){
              "text-size":11.5, "text-anchor":"top", "text-offset":[0,0.8], "text-optional":true },
     paint:{ "text-color":"#31435c", "text-halo-color":"#ffffff", "text-halo-width":1.4 } });
 
-  map.addSource("stops", { type:"geojson", data: feats(d.stops||[], function(s){ return { kind:s.kind }; }) });
+  map.addSource("stops", { type:"geojson", data: feats(d.stops||[], function(s){
+    return { kind:s.kind, place:s.place||"", date:s.date||(s.occurred_at||"").slice(0,10) }; }) });
   map.addLayer({ id:"stop-dots", type:"circle", source:"stops",
     paint:{ "circle-radius":4.5, "circle-color":"#c8621f",
             "circle-stroke-color":"#ffffff", "circle-stroke-width":1.3 } });
+
+  // Photos and journal entries, as emoji icons drawn into sprites (the font
+  // PBFs carry no emoji, but a canvas does).
+  function emojiIcon(name, glyph){
+    var c = document.createElement("canvas"); c.width = 48; c.height = 48;
+    var x = c.getContext("2d");
+    x.beginPath(); x.arc(24,24,22,0,7); x.fillStyle="#ffffff"; x.fill();
+    x.strokeStyle="rgba(0,0,0,.18)"; x.lineWidth=2; x.stroke();
+    x.font = "26px serif"; x.textAlign="center"; x.textBaseline="middle";
+    x.fillText(glyph, 24, 26);
+    if (!map.hasImage(name)) map.addImage(name, x.getImageData(0,0,48,48), { pixelRatio: 2 });
+  }
+  emojiIcon("pin-photo", "📷");
+  emojiIcon("pin-journal", "✏️");
+
+  map.addSource("photopins", { type:"geojson", data: feats(d.photos||[], function(p){
+    return { id:p.id, thumb:p.thumb_key||"", date:p.date||"" }; }) });
+  map.addLayer({ id:"photo-pins", type:"symbol", source:"photopins",
+    layout:{ "icon-image":"pin-photo", "icon-size":0.75, "icon-allow-overlap":true } });
+
+  map.addSource("journalpins", { type:"geojson", data: feats(d.journal||[], function(j){
+    return { id:j.id, date:j.date||"", excerpt:j.excerpt||"", author:j.author||"" }; }) });
+  map.addLayer({ id:"journal-pins", type:"symbol", source:"journalpins",
+    layout:{ "icon-image":"pin-journal", "icon-size":0.75, "icon-allow-overlap":true } });
+
+  /* Everything on the map opens the thing it stands for. */
+  function popupAt(coord, html){
+    new maplibregl.Popup({ maxWidth:"250px", closeButton:true })
+      .setLngLat(coord).setHTML(html).addTo(map);
+  }
+  map.on("click", "place-dots", function(e){
+    var f = e.features[0];
+    popupAt(f.geometry.coordinates,
+      '<b>'+esc(f.properties.name)+'</b><br>' +
+      '<button class="ghostbtn" style="margin-top:6px" ' +
+        'onclick="loadPlace(\''+esc(f.properties.id)+'\')">Open the plan</button>');
+  });
+  map.on("click", "place-labels", function(e){
+    var f = e.features[0];
+    loadPlace(f.properties.id);
+  });
+  map.on("click", "stop-dots", function(e){
+    var f = e.features[0], pr = f.properties;
+    popupAt(f.geometry.coordinates,
+      '<b>'+(ICON[pr.kind]||"")+' '+esc(pr.place || pr.kind)+'</b><br>' +
+      '<button class="ghostbtn" style="margin-top:6px" ' +
+        'onclick="loadDay(\''+esc(pr.date)+'\')">Open that day</button>');
+  });
+  map.on("click", "photo-pins", function(e){
+    var f = e.features[0], pr = f.properties;
+    popupAt(f.geometry.coordinates,
+      (pr.thumb ? '<img src="/photo/'+esc(pr.thumb)+'" style="width:100%;border-radius:8px" ' +
+        'onclick="loadDay(\''+esc(pr.date)+'\')">' : '') +
+      '<button class="ghostbtn" style="margin-top:6px" ' +
+        'onclick="loadDay(\''+esc(pr.date)+'\')">Open that day</button>');
+  });
+  map.on("click", "journal-pins", function(e){
+    var f = e.features[0], pr = f.properties;
+    popupAt(f.geometry.coordinates,
+      '<p style="margin:0;font-size:13px;line-height:1.4">'+esc(pr.excerpt)+
+      (pr.excerpt.length >= 120 ? '&hellip;' : '')+'</p>' +
+      '<p style="margin:4px 0 0;font-size:11px;color:#888">'+esc(pr.author)+'</p>' +
+      '<button class="ghostbtn" style="margin-top:6px" ' +
+        'onclick="loadDay(\''+esc(pr.date)+'\')">Open that day</button>');
+  });
+  ["place-dots","place-labels","stop-dots","photo-pins","journal-pins"].forEach(function(l){
+    map.on("mouseenter", l, function(){ map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", l, function(){ map.getCanvas().style.cursor = ""; });
+  });
 
   var t0 = (d.tracks && d.tracks[0] && d.tracks[0][0]) || null;
   if (t0) {
@@ -1029,7 +1250,8 @@ function renderBasemap(d){
       '<span style="color:#14110e">&#9679;</span> home &middot; ' +
       '<span style="color:#c8621f">&#9679;</span> stops &middot; ' +
       '<span style="color:#4a6fa5">&#9679;</span> the plan &middot; ' +
-      '<span style="color:#1f6f5c">&#9679;</span> where they are now</p>';
+      '<span style="color:#1f6f5c">&#9679;</span> where they are now &middot; ' +
+      '&#128247; photos &middot; &#9999;&#65039; journal &mdash; tap anything to open it</p>';
   var b = trackBounds(d);
   var opts = { container:"bigmap", style: TILES_BASE + "/style.json",
                minZoom:3, maxZoom:17.5, attributionControl:false };

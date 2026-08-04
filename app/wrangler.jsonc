@@ -15,6 +15,11 @@
   "name": "roadtrip-app",
   "main": "src/index.js",
   "compatibility_date": "2026-07-01",
+  "r2_buckets": [
+    // Adopted 2026-08-03: the bucket already existed (created 19:57Z that day,
+    // origin unconfirmed — see the workstream's carry-forward) and was empty.
+    { "binding": "PHOTOS", "bucket_name": "roadtrip-photos" }
+  ],
   "observability": { "enabled": true },
   "workers_dev": true,
   "d1_databases": [
