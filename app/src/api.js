@@ -172,7 +172,7 @@ export async function trip(env) {
 
 /* -------------------------------------------------------------------- day */
 
-export async function day(env, date) {
+export async function day(env, date, person) {
   const [summary, stops, photos, journal, segments, places] = await Promise.all([
     env.roadtrip.prepare(`SELECT * FROM v_day_summary WHERE date = ?`).bind(date).first(),
     env.roadtrip.prepare(
@@ -182,9 +182,12 @@ export async function day(env, date) {
       `SELECT id, r2_key, thumb_key, caption, taken_at, lat, lon, author_id
          FROM photo WHERE date = ? ORDER BY taken_at`).bind(date).all(),
     env.roadtrip.prepare(
+      // Same share-flag read filter as journal(): private entries are
+      // author-only on every read path, not just the feed.
       `SELECT j.id, j.body, j.written_at, j.shared, p.name AS author
          FROM journal_entry j LEFT JOIN person p ON p.id = j.author_id
-        WHERE j.date = ? ORDER BY j.written_at`).bind(date).all(),
+        WHERE j.date = ? AND (j.shared = 1 OR j.author_id = ?)
+        ORDER BY j.written_at`).bind(date, person?.id ?? "").all(),
     env.roadtrip.prepare(
       `SELECT t.transaction_id, t.gps, t.distance, t.start_time, t.end_time
          FROM trips t JOIN v_segment_local v ON v.transaction_id = t.transaction_id
@@ -260,7 +263,7 @@ export async function reservation(env, id) {
 /* -------------------------------------------------------------------- map */
 
 export async function map(env) {
-  const [segments, stops, last, total] = await Promise.all([
+  const [segments, stops, last, total, places] = await Promise.all([
     env.roadtrip.prepare(
       `SELECT t.transaction_id, t.gps, t.gps_format, t.start_time
          FROM trips t, trip_meta m
@@ -271,6 +274,10 @@ export async function map(env) {
         WHERE lat IS NOT NULL AND lon IS NOT NULL ORDER BY occurred_at`).all(),
     env.roadtrip.prepare(`SELECT lat, lon, ts FROM track_points ORDER BY ts DESC LIMIT 1`).first(),
     env.roadtrip.prepare(`SELECT * FROM v_trip_mileage`).first(),
+    // Itinerary places, geocoded 2026-08-03: labeled pins for the basemap.
+    env.roadtrip.prepare(
+      `SELECT id, seq, name, lat, lon FROM intention
+        WHERE lat IS NOT NULL AND dropped = 0 ORDER BY seq`).all(),
   ]);
   // ~90 points per segment keeps the whole trip well under 100 KB even at
   // six weeks, and is indistinguishable at this zoom.
@@ -283,6 +290,7 @@ export async function map(env) {
     stops: stops.results,
     current: last || null,
     miles: total?.miles ?? 0,
+    places: places.results,
   });
 }
 
@@ -415,12 +423,17 @@ export async function deleteStop(env, person, body) {
  * sitting down at a picnic table afterwards. Keeping both capture paths and
  * merging the reading means there is never a question of which one to use.
  */
-export async function journal(env) {
+export async function journal(env, person) {
+  // Read-side enforcement of the share flag: a private entry (shared = 0) is
+  // visible only to its author. Storing the flag on write was never enough —
+  // if Lily and Ada answer "private by default", this filter is what makes
+  // that a default change instead of a leak to their parents.
   const [entries, observations] = await Promise.all([
     env.roadtrip.prepare(
       `SELECT j.id, j.date, j.written_at, j.body, j.shared, p.name AS author, 'entry' AS source
          FROM journal_entry j LEFT JOIN person p ON p.id = j.author_id
-        ORDER BY j.written_at DESC`).all(),
+        WHERE j.shared = 1 OR j.author_id = ?
+        ORDER BY j.written_at DESC`).bind(person?.id ?? "").all(),
     env.roadtrip.prepare(
       `SELECT s.id, s.date, s.occurred_at AS written_at, s.note AS body, 1 AS shared,
               p.name AS author, 'observation' AS source, s.place, s.lat, s.lon

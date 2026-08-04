@@ -60,10 +60,47 @@ worker/
   src/index.js    Ingest endpoint — auth, event parsing
   migrations/     D1 schema, applied in numeric order
   wrangler.jsonc  Deploy config
+tiles/
+  src/index.js    Basemap tile server — pmtiles-from-R2, fonts, sprites,
+                  MapLibre lib, style.json, gated multipart upload
+  wrangler.jsonc  Deploy config (R2 binding: roadtrip-tiles)
 scripts/
-  backfill_trips.py    Historical trips from the Bouncie REST API
-  seed_itinerary.py    People, days, and the itinerary overlay from the vault
+  backfill_trips.py       Historical trips from the Bouncie REST API
+  seed_itinerary.py       People, days, and the itinerary overlay from the vault
+  geocode_intentions.py   One-time geocode of the 34 itinerary places (curated
+                          queries; prints TSV for review, writes nothing)
 ```
+
+## The basemap (tiles.roadtripadventure.app)
+
+The Map tab renders a real tile basemap — roads, towns, labels — with the
+route, current position, stops and itinerary pins overlaid. Everything it
+needs is self-hosted, deliberately: no API key, no usage cap, no third party
+in the serving path.
+
+- **Tiles:** a one-time Protomaps extract (`corridor-z14.pmtiles`, ~1 GB,
+  OpenStreetMap data, zooms 0–14) covering a 30 km buffer of the actual
+  driving route, OSRM-routed through home plus all 34 geocoded itinerary
+  places. Stored in the `roadtrip-tiles` R2 bucket. Rebuild recipe:
+  `pmtiles extract https://build.protomaps.com/<date>.pmtiles out.pmtiles
+  --region=corridor.geojson --maxzoom=14`. Off-corridor tiles return 204 and
+  render as blank ground; the corridor is the map.
+- **Serving:** the `roadtrip-tiles` Worker reads the archive from R2 with
+  range requests (pmtiles lib) and serves `/corridor/{z}/{x}/{y}.mvt`, plus
+  `/style.json`, `/fonts/*` (Noto Sans, three stacks), `/sprites/*`, and
+  `/lib/*` (maplibre-gl js+css). Edge-cached immutable.
+- **Client:** the shell lazy-loads maplibre-gl from the tiles domain only
+  when the Map tab opens. If the library can't load, the screen falls back
+  to the original in-house SVG vector map (kept intact); if only tiles fail,
+  MapLibre still draws the overlays on blank ground. Route-on-blank, never a
+  white screen.
+- **Upload:** `wrangler r2 object put` caps at 300 MiB, so the Worker carries
+  a gated multipart upload path (`/u/create`, `/u/part`, `/u/complete`,
+  header `X-Upload-Key: $UPLOAD_SECRET`). Note: Cloudflare's bot filter 403s
+  Python's default urllib User-Agent on workers.dev — set a UA.
+- **Geocodes** live on `intention.lat/lon` (written 2026-08-03, all 34 rows;
+  sources: Nominatim with hand-curated queries, recreation.gov for Eggerts
+  Landing). `/api/map` serves them as `places`.
 
 ## Data model — the day is the spine
 

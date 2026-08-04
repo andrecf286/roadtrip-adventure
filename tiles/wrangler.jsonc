@@ -1,0 +1,21 @@
+{
+  // Tile server for the Map screen's real basemap.
+  //
+  // Serves z/x/y vector tiles out of the corridor .pmtiles archive in R2,
+  // plus the self-hosted MapLibre assets (fonts, sprites, style, library).
+  // Everything the basemap needs lives in this one Worker + one R2 bucket —
+  // no API key, no usage cap, no third party in the serving path.
+  //
+  // Do NOT add a `routes` block — the available Cloudflare token lacks Workers
+  // Routes edit on this zone and the deploy fails with auth error 10000. The
+  // custom domain (tiles.roadtripadventure.app) is bound via the account-scoped
+  // PUT /accounts/{acct}/workers/domains endpoint instead. See the README.
+  "name": "roadtrip-tiles",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true },
+  "workers_dev": true,
+  "r2_buckets": [
+    { "binding": "TILES", "bucket_name": "roadtrip-tiles" }
+  ]
+}

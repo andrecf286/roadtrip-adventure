@@ -83,10 +83,10 @@ export default {
         case "/api/me":          return json(person);
         case "/api/today":       return api.today(env);
         case "/api/trip":        return api.trip(env);
-        case "/api/day":         return api.day(env, url.searchParams.get("date"));
+        case "/api/day":         return api.day(env, url.searchParams.get("date"), person);
         case "/api/place":       return api.place(env, url.searchParams.get("id"));
         case "/api/places":      return api.places(env);
-        case "/api/journal-feed": return api.journal(env);
+        case "/api/journal-feed": return api.journal(env, person);
         case "/api/photos":      return api.photos(env);
         case "/api/reservation": return api.reservation(env, url.searchParams.get("id"));
         case "/api/map":         return api.map(env);

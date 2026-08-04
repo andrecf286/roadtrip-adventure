@@ -756,11 +756,148 @@ function geoFine(){
   }, function(){ GEO_FINE_PENDING = false; return null; });
 }
 
+/* ---- Real basemap: MapLibre + self-hosted Protomaps tiles on R2. ----
+   The library, style, fonts, sprites and tiles all come from our own
+   tiles.roadtripadventure.app — no key, no cap, no third party. Everything is
+   lazy: nothing map-related loads until someone opens the Map tab, so Today
+   stays light on campground wifi. If the library cannot load (offline, tiles
+   host unreachable), the screen falls back to the original in-house vector
+   map below; if only the TILES fail, MapLibre still draws the route and
+   markers on a blank ground — route-on-blank, never a white screen. */
+var TILES_BASE = "https://tiles.roadtripadventure.app";
+var ML_FAILED = false, ML_MAP = null;
+
+function ensureMapLibre(){
+  if (window.maplibregl) return Promise.resolve(true);
+  if (ML_FAILED) return Promise.resolve(false);
+  return new Promise(function(resolve){
+    var done = false;
+    function finish(ok){ if (!done){ done = true; ML_FAILED = !ok; resolve(ok); } }
+    var l = document.createElement("link");
+    l.rel = "stylesheet"; l.href = TILES_BASE + "/lib/maplibre-gl.css";
+    document.head.appendChild(l);
+    var s = document.createElement("script");
+    s.src = TILES_BASE + "/lib/maplibre-gl.js";
+    s.onload = function(){ finish(!!window.maplibregl); };
+    s.onerror = function(){ finish(false); };
+    document.head.appendChild(s);
+    setTimeout(function(){ finish(!!window.maplibregl); }, 12000);
+  });
+}
+
+function trackBounds(d){
+  var lons = [], lats = [];
+  (d.tracks||[]).forEach(function(t){ t.forEach(function(c){ lons.push(c[0]); lats.push(c[1]); }); });
+  if (d.current){ lons.push(d.current.lon); lats.push(d.current.lat); }
+  if (!lons.length) return null;
+  var pad = 0.15;
+  return [[Math.min.apply(null,lons)-pad, Math.min.apply(null,lats)-pad],
+          [Math.max.apply(null,lons)+pad, Math.max.apply(null,lats)+pad]];
+}
+
+function mlFit(){ if (ML_MAP){ var b = ML_MAP.__fitBounds; if (b) ML_MAP.fitBounds(b, { padding: 36, duration: 400 }); } }
+function mlZoom(dz){ if (ML_MAP) ML_MAP.zoomTo(ML_MAP.getZoom()+dz, { duration: 250 }); }
+
+function basemapOverlays(map, d){
+  var feats = function(rows, props){ return { type:"FeatureCollection", features: rows.map(function(r){
+    return { type:"Feature", properties: props(r),
+             geometry:{ type:"Point", coordinates:[r.lon, r.lat] } }; }) }; };
+  map.addSource("route", { type:"geojson", data:{ type:"Feature", properties:{},
+    geometry:{ type:"MultiLineString", coordinates:(d.tracks||[]).filter(function(t){ return t.length>1; }) } } });
+  map.addLayer({ id:"route-casing", type:"line", source:"route",
+    layout:{ "line-join":"round", "line-cap":"round" },
+    paint:{ "line-color":"#ffffff", "line-width":5.5, "line-opacity":0.75 } });
+  map.addLayer({ id:"route-line", type:"line", source:"route",
+    layout:{ "line-join":"round", "line-cap":"round" },
+    paint:{ "line-color":"#1f6f5c", "line-width":3 } });
+
+  // Itinerary places: dots always, names once you're close enough to care.
+  map.addSource("places", { type:"geojson", data: feats(d.places||[], function(p){ return { name:p.name }; }) });
+  map.addLayer({ id:"place-dots", type:"circle", source:"places",
+    paint:{ "circle-radius":4, "circle-color":"#4a6fa5",
+            "circle-stroke-color":"#ffffff", "circle-stroke-width":1.3 } });
+  map.addLayer({ id:"place-labels", type:"symbol", source:"places", minzoom:5.2,
+    layout:{ "text-field":["get","name"], "text-font":["Noto Sans Medium"],
+             "text-size":11.5, "text-anchor":"top", "text-offset":[0,0.8], "text-optional":true },
+    paint:{ "text-color":"#31435c", "text-halo-color":"#ffffff", "text-halo-width":1.4 } });
+
+  map.addSource("stops", { type:"geojson", data: feats(d.stops||[], function(s){ return { kind:s.kind }; }) });
+  map.addLayer({ id:"stop-dots", type:"circle", source:"stops",
+    paint:{ "circle-radius":4.5, "circle-color":"#c8621f",
+            "circle-stroke-color":"#ffffff", "circle-stroke-width":1.3 } });
+
+  var t0 = (d.tracks && d.tracks[0] && d.tracks[0][0]) || null;
+  if (t0) {
+    map.addSource("home", { type:"geojson", data:{ type:"Feature", properties:{},
+      geometry:{ type:"Point", coordinates:t0 } } });
+    map.addLayer({ id:"home-dot", type:"circle", source:"home",
+      paint:{ "circle-radius":5, "circle-color":"#14110e",
+              "circle-stroke-color":"#ffffff", "circle-stroke-width":1.5 } });
+  }
+  if (d.current) {
+    map.addSource("here", { type:"geojson", data:{ type:"Feature", properties:{},
+      geometry:{ type:"Point", coordinates:[d.current.lon, d.current.lat] } } });
+    map.addLayer({ id:"here-halo", type:"circle", source:"here",
+      paint:{ "circle-radius":11, "circle-color":"#1f6f5c", "circle-opacity":0.22 } });
+    map.addLayer({ id:"here-dot", type:"circle", source:"here",
+      paint:{ "circle-radius":5.5, "circle-color":"#1f6f5c",
+              "circle-stroke-color":"#ffffff", "circle-stroke-width":1.5 } });
+  }
+}
+
+function renderBasemap(d){
+  el("s-map").innerHTML =
+    '<h1>Where they have been</h1><p class="sub">'+(d.miles||0)+' miles</p>' +
+    '<div class="maparea" id="bigmap" style="height:62vh"></div>' +
+    '<div class="row" style="margin-top:8px;gap:8px">' +
+      '<button class="ghostbtn" style="margin:0;flex:1" onclick="mlZoom(-1)">&minus;</button>' +
+      '<button class="ghostbtn" style="margin:0;flex:1" onclick="mlZoom(1)">+</button>' +
+      '<button class="ghostbtn" style="margin:0;flex:2" onclick="mlFit()">Fit</button>' +
+    '</div>' +
+    '<p class="tiny" style="margin-top:9px">' +
+      '<span style="color:#14110e">&#9679;</span> home &middot; ' +
+      '<span style="color:#c8621f">&#9679;</span> stops &middot; ' +
+      '<span style="color:#4a6fa5">&#9679;</span> the plan &middot; ' +
+      '<span style="color:#1f6f5c">&#9679;</span> where they are now</p>';
+  var b = trackBounds(d);
+  var opts = { container:"bigmap", style: TILES_BASE + "/style.json",
+               minZoom:3, maxZoom:17.5, attributionControl:false };
+  if (b) { opts.bounds = b; opts.fitBoundsOptions = { padding: 36 }; }
+  else { opts.center = [-98, 42]; opts.zoom = 3.5; }
+  var map = new maplibregl.Map(opts);
+  map.addControl(new maplibregl.AttributionControl({ compact:true }));
+  ML_MAP = map; map.__fitBounds = b;
+  map.on("error", function(){ /* per-tile failures: basemap goes blank there,
+    overlays keep rendering. Deliberate: route-on-blank beats white screen. */ });
+  var loaded = false;
+  map.on("load", function(){ loaded = true; basemapOverlays(map, d); });
+  setTimeout(function(){
+    if (!loaded) {
+      // Style never arrived (offline / tiles host down). Tear down and use
+      // the in-house vector map instead.
+      try { map.remove(); } catch(e){}
+      ML_MAP = null;
+      loadMapScreenVector(d);
+    }
+  }, 10000);
+}
+
 function loadMapScreen(){
   show("map");
-  Promise.all([get("/api/map"), geo()]).then(function(res){
-    var d = res[0], arcs = res[1] || [];
+  Promise.all([get("/api/map"), ensureMapLibre()]).then(function(res){
+    var d = res[0], libOk = res[1];
     if (!d) { offlineInto("s-map", "loadMapScreen()"); return; }
+    if (libOk) renderBasemap(d);
+    else loadMapScreenVector(d);
+  });
+}
+
+/* The original in-house vector map, kept as the offline fallback until the
+   basemap has proven itself on the road. Reached when maplibre-gl cannot be
+   fetched at all, or when the style/tiles never load. */
+function loadMapScreenVector(d){
+  geo().then(function(arcs){
+    arcs = arcs || [];
 
     // ONE renderer, shared with the Trip mini-map. A second copy lived here and
     // that duplication was exactly what killed progressive zoom: this screen
