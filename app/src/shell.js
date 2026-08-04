@@ -225,6 +225,15 @@ function checkVersion(){
   });
 }
 document.addEventListener("visibilitychange", function(){ if (!document.hidden) checkVersion(); });
+
+/* Today keeps itself current: while it is the visible screen, re-pull every
+   90 seconds so the live miles tick along without anyone tab-hopping. The
+   screen has no text inputs, so a re-render never eats a keystroke. */
+setInterval(function(){
+  if (document.hidden) return;
+  var sc = document.querySelector(".screen.on");
+  if (sc && sc.id === "s-today") loadToday();
+}, 90000);
 setInterval(checkVersion, 8 * 60 * 1000);
 checkVersion();
 
@@ -798,10 +807,27 @@ function loadBadges(){
         fmtShort(p.first_date)+'</span></span>';
     }).join("") || '<p class="empty">Parks appear when the car stops inside one.</p>';
 
+    // Mile markers as interstate-style shields — red crest, blue field,
+    // white number. A road trip's odometer deserves highway iconography.
+    function mileShield(n){
+      return '<svg viewBox="0 0 100 100" style="width:70px;height:70px">' +
+        '<path d="M50 4 C62 12 80 14 96 12 C99 44 92 76 50 97 C8 76 1 44 4 12 C20 14 38 12 50 4 Z" ' +
+          'fill="#124a8f" stroke="#ffffff" stroke-width="3.5"/>' +
+        '<path d="M50 4 C62 12 80 14 96 12 C96.5 17 96.6 21 96.4 26 L3.6 26 C3.4 21 3.5 17 4 12 C20 14 38 12 50 4 Z" ' +
+          'fill="#b3282d"/>' +
+        '<text x="50" y="21" text-anchor="middle" fill="#fff" font-size="11.5" font-weight="700" ' +
+          'font-family="system-ui,sans-serif" letter-spacing="1">MILES</text>' +
+        '<text x="50" y="65" text-anchor="middle" fill="#fff" font-size="25" font-weight="800" ' +
+          'font-family="system-ui,sans-serif">'+n.toLocaleString()+'</text></svg>';
+    }
     var miles = "";
     for (var i = 1; i <= d.miles.earned; i++)
-      miles += '<span class="badge">&#128739; '+(i*1000).toLocaleString()+' miles</span>';
-    miles += '<span class="badge" style="opacity:.55">'+d.miles.to_next.toLocaleString()+
+      miles += '<div style="width:31%;min-width:96px;text-align:center;padding:10px 4px;' +
+        'background:var(--card);border:1px solid var(--line);border-radius:14px">' +
+        mileShield(i*1000) +
+        '<div class="tiny" style="opacity:.65;margin-top:2px">' +
+        (i*1000).toLocaleString()+' miles</div></div>';
+    miles += '<span class="badge" style="opacity:.55;align-self:center">'+d.miles.to_next.toLocaleString()+
       ' mi to '+((d.miles.earned+1)*1000).toLocaleString()+'</span>';
 
     var tanks = "";
@@ -1351,20 +1377,34 @@ function basemapOverlays(map, d){
   // Photos and journal entries, as emoji icons drawn into sprites (the font
   // PBFs carry no emoji, but a canvas does).
   function emojiIcon(name, glyph){
-    var c = document.createElement("canvas"); c.width = 48; c.height = 48;
+    var c = document.createElement("canvas"); c.width = 64; c.height = 64;
     var x = c.getContext("2d");
-    x.beginPath(); x.arc(24,24,22,0,7); x.fillStyle="#ffffff"; x.fill();
-    x.strokeStyle="rgba(0,0,0,.18)"; x.lineWidth=2; x.stroke();
-    x.font = "26px serif"; x.textAlign="center"; x.textBaseline="middle";
-    x.fillText(glyph, 24, 26);
-    if (!map.hasImage(name)) map.addImage(name, x.getImageData(0,0,48,48), { pixelRatio: 2 });
+    x.beginPath(); x.arc(32,32,29,0,7); x.fillStyle="#ffffff"; x.fill();
+    x.strokeStyle="rgba(0,0,0,.22)"; x.lineWidth=2.5; x.stroke();
+    x.font = "36px serif"; x.textAlign="center"; x.textBaseline="middle";
+    x.fillText(glyph, 32, 35);
+    if (!map.hasImage(name)) map.addImage(name, x.getImageData(0,0,64,64), { pixelRatio: 2 });
   }
   emojiIcon("pin-photo", "📷");
   emojiIcon("pin-journal", "✏️");
 
-  map.addSource("photopins", { type:"geojson", data: feats(d.photos||[], function(p){
+  // Photos located by the same breadcrumb share EXACT coordinates and their
+  // pins stack invisibly — Lily's two camp photos looked like one. Spread
+  // coincident pins in a small deterministic ring so each stays tappable.
+  var photoRows = (d.photos||[]).map(function(p){ return Object.assign({}, p); });
+  var seenAt = {};
+  photoRows.forEach(function(p){
+    var k = p.lat.toFixed(4) + "," + p.lon.toFixed(4);
+    var n = seenAt[k] = (seenAt[k] || 0) + 1;
+    if (n > 1) {
+      var ang = (n - 1) * 2.4; // golden-angle-ish, no two overlap
+      p.lat += 0.0011 * Math.sin(ang);
+      p.lon += 0.0011 * Math.cos(ang) / Math.cos(p.lat * Math.PI / 180);
+    }
+  });
+  map.addSource("photopins", { type:"geojson", data: feats(photoRows, function(p){
     return { id:p.id, thumb:p.thumb_key||"", date:p.date||"" }; }) });
-  var pinSize = ["interpolate", ["linear"], ["zoom"], 4, 0.55, 8, 0.9, 12, 1.3, 15, 1.7];
+  var pinSize = ["interpolate", ["linear"], ["zoom"], 4, 0.7, 8, 1.1, 12, 1.5, 15, 1.9];
   map.addLayer({ id:"photo-pins", type:"symbol", source:"photopins",
     layout:{ "icon-image":"pin-photo", "icon-size":pinSize, "icon-allow-overlap":true } });
 

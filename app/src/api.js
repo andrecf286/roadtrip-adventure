@@ -73,6 +73,22 @@ function pathMilesOf(pts) {
   return mi;
 }
 
+/** Breadcrumb path miles of trips Bouncie hasn't closed yet — the live tail
+    the completed-trip views can't see. Shared by today() and badges() so the
+    1,000-mile badge appears WHEN they cross it, not at the next stop. */
+async function liveExtraMiles(env) {
+  let mi = 0;
+  const open = await env.roadtrip.prepare(
+    `SELECT t.transaction_id FROM trips t, trip_meta m
+      WHERE t.start_time >= m.trip_start_at AND t.distance IS NULL`).all();
+  for (const t of open.results) {
+    const pts = await env.roadtrip.prepare(
+      `SELECT lon, lat FROM track_points WHERE transaction_id = ? ORDER BY ts`).bind(t.transaction_id).all();
+    mi += pathMilesOf(pts.results.map((r) => [r.lon, r.lat]));
+  }
+  return mi;
+}
+
 /** The car's position at a moment, from the breadcrumb nearest in time —
     within a tolerance, else null. This is what locates a photo whose EXIF
     GPS was stripped (iOS web uploads) but whose timestamp survived. */
@@ -181,15 +197,7 @@ export async function today(env) {
   // v_day_summary only sums COMPLETED trips (distance lands at tripEnd), so
   // the number froze mid-drive — confusing at 70 mph. Add the live path
   // length of today's distance-less trips from their breadcrumbs.
-  let liveMiles = 0;
-  const openTrips = await env.roadtrip.prepare(
-    `SELECT t.transaction_id FROM trips t, trip_meta m
-      WHERE t.start_time >= m.trip_start_at AND t.distance IS NULL`).all();
-  for (const t of openTrips.results) {
-    const pts = await env.roadtrip.prepare(
-      `SELECT lon, lat FROM track_points WHERE transaction_id = ? ORDER BY ts`).bind(t.transaction_id).all();
-    liveMiles += pathMilesOf(pts.results.map((r) => [r.lon, r.lat]));
-  }
+  const liveMiles = await liveExtraMiles(env);
   const milesToday = Math.round(((day?.miles ?? 0) + liveMiles) * 10) / 10;
 
   const dayNumber = day?.day_number
@@ -814,7 +822,7 @@ export async function badges(env) {
     };
   }
 
-  const miles = mileage?.miles ?? 0;
+  const miles = Math.round(((mileage?.miles ?? 0) + await liveExtraMiles(env)) * 10) / 10;
   return json({
     states: STATES_CACHE.states,
     parks: parks.results,
