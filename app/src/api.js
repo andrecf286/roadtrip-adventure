@@ -450,7 +450,7 @@ export async function uploadPhoto(env, person, request) {
     these are pictures of two teenagers' trip, never public URLs. */
 export async function servePhoto(env, path) {
   const key = path.replace(/^\/photo\//, "");
-  if (!/^(photos|thumbs)\//.test(key)) return json({ error: "bad key" }, 400);
+  if (!/^(photos|thumbs|badges)\//.test(key)) return json({ error: "bad key" }, 400);
   const obj = await env.PHOTOS.get(key);
   if (!obj) return json({ error: "not found" }, 404);
   return new Response(obj.body, {
@@ -538,7 +538,7 @@ export async function badges(env) {
       `SELECT COUNT(*) AS n FROM stop WHERE kind = 'gas' AND gallons IS NOT NULL`).first(),
     env.roadtrip.prepare(
       `SELECT b.id, b.title, b.emoji, b.note, b.date, b.created_at,
-              b.awarded_by, p.name AS awarded_by_name
+              b.awarded_by, b.image_key, p.name AS awarded_by_name
          FROM badge b LEFT JOIN person p ON p.id = b.awarded_by
         ORDER BY b.created_at DESC`).all(),
   ]);
@@ -598,16 +598,46 @@ export async function createBadge(env, person, body) {
   return json({ ok: true, id });
 }
 
+/** Award a badge WITH an image — multipart variant of createBadge, same
+    permission (any of the six). The image is Amelia's "cool tag": client
+    resizes it, we park it in R2 under badges/ and serve it session-gated. */
+export async function uploadBadge(env, person, request) {
+  if (!person) return json({ error: "unauthorized" }, 401);
+  let form;
+  try { form = await request.formData(); }
+  catch { return json({ error: "multipart form required" }, 400); }
+  const title = (form.get("title") || "").toString().trim();
+  if (!title) return json({ error: "title required" }, 400);
+  const id = safeId((form.get("client_id") || "").toString() || null);
+  let imageKey = null;
+  const img = form.get("image");
+  if (img && typeof img !== "string") {
+    imageKey = "badges/" + id + ".jpg";
+    await env.PHOTOS.put(imageKey, img.stream(), {
+      httpMetadata: { contentType: "image/jpeg" } });
+  }
+  await env.roadtrip.prepare(
+    `INSERT OR IGNORE INTO badge (id, title, emoji, note, date, awarded_by, image_key, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, title.slice(0, 80),
+         (form.get("emoji") || "").toString().trim().slice(0, 8) || null,
+         (form.get("note") || "").toString().trim().slice(0, 500) || null,
+         (form.get("date") || "").toString() || null,
+         person.id, imageKey, nowIso()).run();
+  return json({ ok: true, id });
+}
+
 /** Remove a badge: its awarder, or any author (the girls can prune). */
 export async function deleteBadge(env, person, body) {
   if (!person) return json({ error: "unauthorized" }, 401);
   if (!body.id) return json({ error: "id required" }, 400);
   const row = await env.roadtrip
-    .prepare(`SELECT awarded_by FROM badge WHERE id = ?`).bind(body.id).first();
+    .prepare(`SELECT awarded_by, image_key FROM badge WHERE id = ?`).bind(body.id).first();
   if (!row) return json({ error: "not found" }, 404);
   if (person.id !== row.awarded_by && person.role !== "author")
     return json({ error: "not yours to remove" }, 403);
   await env.roadtrip.prepare(`DELETE FROM badge WHERE id = ?`).bind(body.id).run();
+  if (row.image_key) await env.PHOTOS.delete(row.image_key);
   return json({ ok: true });
 }
 

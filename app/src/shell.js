@@ -188,6 +188,32 @@ function flush(){
 }
 window.addEventListener("online", flush);
 
+/* The app updates many times a day right now, and open phones kept serving
+   the old shell until somebody texted "close it and reopen." The served
+   shell hashes itself; when the hash moves, a bar offers one-tap refresh.
+   Never auto-reloads — half-typed journal entries outrank freshness. */
+var APP_V = null;
+function checkVersion(){
+  get("/api/version").then(function(v){
+    if (!v || !v.v) return;
+    if (APP_V === null) { APP_V = v.v; return; }
+    if (v.v !== APP_V) {
+      var q = el("updatebar");
+      if (!q) {
+        q = document.createElement("div");
+        q.id = "updatebar"; q.className = "queued on";
+        q.style.cursor = "pointer";
+        q.innerHTML = "The app has been updated &mdash; tap to refresh";
+        q.onclick = function(){ location.reload(); };
+        document.body.appendChild(q);
+      }
+    }
+  });
+}
+document.addEventListener("visibilitychange", function(){ if (!document.hidden) checkVersion(); });
+setInterval(checkVersion, 8 * 60 * 1000);
+checkVersion();
+
 /* Delete is two taps, not a browser confirm(): a modal dialog blocks the page,
    reads as an error, and on iOS looks like the site has crashed. The first tap
    arms, the second commits, and anything else disarms it. */
@@ -731,6 +757,8 @@ function loadBadges(){
         : '<span></span>';
       return '<div class="card"><div class="row"><b>'+(b.emoji?esc(b.emoji)+' ':'&#127941; ')+
         esc(b.title)+'</b>'+rm+'</div>'+
+        (b.image_key?'<img src="/photo/'+esc(b.image_key)+'" loading="lazy" '+
+          'style="width:100%;max-width:260px;border-radius:12px;margin-top:8px;display:block">':'')+
         (b.note?'<p style="margin:7px 0 0;font-size:14px;line-height:1.45">'+esc(b.note)+'</p>':'')+
         '<p class="tiny" style="margin:6px 0 0">from '+esc(b.awarded_by_name||"someone")+
         (b.date?' &middot; for '+fmtShort(b.date):'')+
@@ -749,6 +777,11 @@ function loadBadges(){
         '<input type="text" id="bg-title" placeholder="The Zotz Badge"></div>' +
         '<textarea id="bg-note" style="min-height:64px;margin-top:8px" ' +
           'placeholder="What earned it?"></textarea>' +
+        '<input type="file" id="bg-image" accept="image/*" style="display:none" ' +
+          'onchange="el(\'bg-image-note\').textContent = this.files.length ? this.files[0].name : \'\'">' +
+        '<div class="row" style="margin-top:8px"><button class="ghostbtn" style="margin:0;flex:1" ' +
+          'onclick="el(\'bg-image\').click()">Add a picture</button>' +
+          '<span class="tiny" id="bg-image-note" style="max-width:45%;overflow:hidden;text-overflow:ellipsis"></span></div>' +
         '<button class="ghostbtn" onclick="awardBadge()">Award it</button></div>' +
       '<h2>States</h2><div class="badges">'+states+'</div>' +
       '<h2>National parks</h2><div class="badges">'+parks+'</div>' +
@@ -772,12 +805,30 @@ function awardBadge(){
     t.focus();
     return;
   }
-  send("/api/badge","POST",{ title:t.value, emoji:(el("bg-emoji")||{}).value||"",
-       note:(el("bg-note")||{}).value||"" })
-    .then(function(r){
-      if (!r || !r.ok) { alertInline(t, "Couldn't award — try again."); return; }
-      loadBadges();
-    });
+  var fileInput = el("bg-image");
+  var file = fileInput && fileInput.files && fileInput.files[0];
+  var done = function(r){
+    if (!r || !r.ok) { alertInline(t, "Couldn't award — try again."); return; }
+    loadBadges();
+  };
+  if (file) {
+    // Amelia's cool tags: resize to 640px so a generated image costs ~60KB.
+    file.arrayBuffer().then(function(buf){
+      return createImageBitmap(new Blob([buf]), { imageOrientation: "from-image" })
+        .then(function(img){ return scaleToBlob(img, 640, 0.82); });
+    }).then(function(blob){
+      var fd = new FormData();
+      fd.append("title", t.value);
+      fd.append("emoji", (el("bg-emoji")||{}).value||"");
+      fd.append("note", (el("bg-note")||{}).value||"");
+      fd.append("image", blob, "badge.jpg");
+      return fetch("/api/badge/upload", { method:"POST", credentials:"same-origin", body: fd })
+        .then(function(r){ return r.json(); });
+    }).then(done, function(){ alertInline(t, "Couldn't award — try again."); });
+  } else {
+    send("/api/badge","POST",{ title:t.value, emoji:(el("bg-emoji")||{}).value||"",
+         note:(el("bg-note")||{}).value||"" }).then(done);
+  }
 }
 
 /* ---- Photos: straight from the camera roll. The phone resizes before

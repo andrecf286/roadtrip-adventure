@@ -15,6 +15,19 @@ import { STATE_ARCS_FINE } from "./geo_fine.js";
 const json = (o, s = 200) =>
   new Response(JSON.stringify(o), { status: s, headers: { "content-type": "application/json" } });
 
+/* Version = hash of the shell actually being served. Zero maintenance: a
+   deploy changes the shell, the hash changes, open phones notice on their
+   next version check and offer a one-tap refresh — no more "close the
+   website and reopen it" texts. */
+let SHELL_HASH = null;
+async function shellVersion() {
+  if (!SHELL_HASH) {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(SHELL));
+    SHELL_HASH = [...new Uint8Array(d)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return SHELL_HASH;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -84,6 +97,10 @@ export default {
       if (!person) return json({ error: "unauthorized" }, 401);
       return api.uploadPhoto(env, person, request);
     }
+    if (path === "/api/badge/upload") {
+      if (!person) return json({ error: "unauthorized" }, 401);
+      return api.uploadBadge(env, person, request);
+    }
 
     if (path.startsWith("/api/")) {
       if (!person) return json({ error: "unauthorized" }, 401);
@@ -92,6 +109,7 @@ export default {
 
       switch (path) {
         case "/api/me":          return json(person);
+        case "/api/version":     return json({ v: await shellVersion() });
         case "/api/today":       return api.today(env);
         case "/api/trip":        return api.trip(env);
         case "/api/day":         return api.day(env, url.searchParams.get("date"), person);
