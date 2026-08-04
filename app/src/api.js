@@ -633,6 +633,30 @@ function stateOfPoint(x, y) {
   return null;
 }
 
+/** Normalized outline(s) for a state badge: up to 3 rings (Michigan needs
+    both peninsulas), evenly thinned, projected into a 0..100 box with
+    latitude-corrected aspect. The badge IS the state's shape. */
+function stateShape(name) {
+  const sp = STATE_POLYS.find((s) => s.n === name);
+  if (!sp) return null;
+  const rings = sp.r.slice(0, 3).map((r) => thin(r, 50));
+  let la0 = 90, la1 = -90, lo0 = 180, lo1 = -180;
+  for (const r of rings) for (const [x, y] of r) {
+    if (y < la0) la0 = y; if (y > la1) la1 = y;
+    if (x < lo0) lo0 = x; if (x > lo1) lo1 = x;
+  }
+  const k = Math.cos((((la0 + la1) / 2) * Math.PI) / 180);
+  const w = (lo1 - lo0) * k, h = la1 - la0;
+  const sc = 100 / Math.max(w, h);
+  return {
+    w: Math.round(w * sc), h: Math.round(h * sc),
+    rings: rings.map((r) => r.map(([x, y]) => [
+      Math.round((x - lo0) * k * sc * 10) / 10,
+      Math.round((la1 - y) * sc * 10) / 10,
+    ])),
+  };
+}
+
 // States derivation walks every trip polyline; cache per isolate, keyed on
 // how much track exists, so repeat opens of the Badges tab cost one query.
 let STATES_CACHE = null;
@@ -691,7 +715,7 @@ export async function badges(env) {
     STATES_CACHE = {
       key,
       states: Object.entries(seen)
-        .map(([state, first_date]) => ({ state, first_date }))
+        .map(([state, first_date]) => ({ state, first_date, shape: stateShape(state) }))
         .sort((a, b) => (a.first_date < b.first_date ? -1 : 1)),
     };
   }
@@ -779,6 +803,18 @@ export async function createStop(env, person, body) {
   const offset = body.tz_offset || "-0500";
   const id = safeId(body.client_id);
 
+  // A stop with no position can't be a map marker or count toward a visited
+  // place — and Lily's first eleven taps arrived with lat null (phone GPS
+  // absent on campground wifi). The car knows where it is even when the
+  // phone doesn't: default to the freshest breadcrumb when it's recent
+  // enough to trust (30 min covers a stop recorded from a picnic table).
+  let lat = body.lat ?? null, lon = body.lon ?? null;
+  if (lat == null) {
+    const p = await env.roadtrip
+      .prepare(`SELECT lat, lon, ts FROM track_points ORDER BY ts DESC LIMIT 1`).first();
+    if (p && Date.now() - new Date(p.ts).getTime() < 30 * 60000) { lat = p.lat; lon = p.lon; }
+  }
+
   // INSERT OR IGNORE, keyed on the client-supplied id: the offline queue will
   // retry the same stop and must not create duplicates.
   await env.roadtrip.prepare(
@@ -788,7 +824,7 @@ export async function createStop(env, person, body) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, localDate(at, offset), at, offset, body.kind,
-    body.lat ?? null, body.lon ?? null, body.place ?? null, body.note ?? null,
+    lat, lon, body.place ?? null, body.note ?? null,
     body.cost ?? null, body.gallons ?? null, body.price_per_gallon ?? null,
     person.id, nowIso()
   ).run();

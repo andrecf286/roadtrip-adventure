@@ -687,15 +687,28 @@ function loadBadges(){
   get("/api/badges").then(function(d){
     if (!d) { offlineInto("s-badges", "loadBadges()"); return; }
 
-    var states = (d.states||[]).map(function(s){
-      return '<span class="badge">'+esc(s.state)+'<span style="opacity:.6;font-weight:400"> &middot; '+
-        fmtShort(s.first_date)+'</span></span>';
+    // Each state badge IS the state: its outline, filled route-green, with
+    // the name and the day they first crossed in.
+    var states = (d.states||[]).map(function(st){
+      var art = '';
+      if (st.shape && st.shape.rings) {
+        var polys = st.shape.rings.map(function(r){
+          return '<polygon points="'+r.map(function(pt){ return pt[0]+','+pt[1]; }).join(' ')+
+            '" fill="#1f6f5c22" stroke="#1f6f5c" stroke-width="2.5" stroke-linejoin="round"/>';
+        }).join('');
+        art = '<svg viewBox="-4 -4 '+(st.shape.w+8)+' '+(st.shape.h+8)+'" ' +
+          'style="width:64px;height:'+Math.round(64*(st.shape.h+8)/(st.shape.w+8))+'px;max-height:72px">'+polys+'</svg>';
+      }
+      return '<div style="width:31%;min-width:96px;text-align:center;padding:10px 4px;' +
+        'background:var(--card);border:1px solid var(--line);border-radius:14px">' + art +
+        '<div style="font-size:12.5px;font-weight:650;margin-top:4px">'+esc(st.state)+'</div>' +
+        '<div class="tiny" style="opacity:.65">'+fmtShort(st.first_date)+'</div></div>';
     }).join("") || '<p class="empty">No states yet — that changes fast.</p>';
 
     var parks = (d.parks||[]).map(function(p){
       return '<span class="badge">&#127966; '+esc(p.name)+'<span style="opacity:.6;font-weight:400"> &middot; '+
         fmtShort(p.first_date)+'</span></span>';
-    }).join("") || '<p class="empty">Parks appear when a day is marked at one.</p>';
+    }).join("") || '<p class="empty">Parks appear when the car stops inside one.</p>';
 
     var miles = "";
     for (var i = 1; i <= d.miles.earned; i++)
@@ -734,7 +747,9 @@ function loadBadges(){
       ((d.parks||[]).length===1?"":"s")+' &middot; '+d.miles.total.toLocaleString()+' miles</p>' +
       '<h2>From the family</h2>' +
       (bespoke || '<p class="empty">None yet. Anyone can award one &mdash; make one up.</p>') +
-      '<div class="card" style="margin-top:9px">' +
+      '<button class="ghostbtn" id="bg-open" onclick="el(\'bg-composer\').style.display=\'block\';this.style.display=\'none\'">' +
+        'Award a badge</button>' +
+      '<div class="card" id="bg-composer" style="margin-top:9px;display:none">' +
         '<div class="row" style="gap:8px"><input type="text" id="bg-emoji" placeholder="&#127941;" ' +
           'style="width:64px;flex:none;text-align:center">' +
         '<input type="text" id="bg-title" placeholder="The Zotz Badge"></div>' +
