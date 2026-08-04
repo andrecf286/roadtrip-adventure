@@ -132,8 +132,7 @@ export const SHELL = String.raw`<!DOCTYPE html>
     <button class="on" data-tab="today"><span class="ic">&#128205;</span>Today</button>
     <button data-tab="trip"><span class="ic">&#128197;</span>Trip</button>
     <button data-tab="map"><span class="ic">&#128506;</span>Map</button>
-    <button data-tab="journal"><span class="ic">&#9997;</span>Journal</button>
-    <button data-tab="photos"><span class="ic">&#128247;</span>Photos</button>
+    <button data-tab="photos" style="font-size:9px"><span class="ic">&#128247;&#9997;</span>Photos &middot; Journal</button>
     <button data-tab="badges"><span class="ic">&#127941;</span>Badges</button>
     <button data-tab="places"><span class="ic">&#128204;</span>Plan</button>
   </nav>
@@ -244,9 +243,8 @@ function doDelete(kind, id){
   var day = el("s-day").classList.contains("on") && LAST_DAY;
   send(url, "DELETE", { id: id }).then(function(){
     if (day) loadDay(LAST_DAY);
-    else if (kind === "journal" || kind === "observation") tab("journal");
     else if (kind === "badge") tab("badges");
-    else if (kind === "photo") tab("photos");
+    else if (kind === "journal" || kind === "observation" || kind === "photo") tab("photos");
     else tab("today");
   });
 }
@@ -269,7 +267,6 @@ function tab(name){
   if(name==="today") loadToday();
   if(name==="trip") loadTrip();
   if(name==="map") loadMapScreen();
-  if(name==="journal") loadJournal();
   if(name==="photos") loadPhotos();
   if(name==="badges") loadBadges();
   if(name==="places") loadPlaces();
@@ -322,38 +319,61 @@ function loadToday(){
         (d.last_stop.gallons?'<p class="tiny" style="margin:6px 0 0">'+d.last_stop.gallons+' gal'+
           (d.last_stop.cost?' &middot; $'+d.last_stop.cost.toFixed(2):'')+'</p>':'')+'</div>'
       : '';
-    // The one write that was missing: linking today to a place. Offered when
-    // the car is near a geocoded itinerary place; the tap IS the record, and
-    // undo exists. This is what feeds "Coming up", the reached count, and the
-    // badges — an unmarked day has to be reconstructed from the track later.
-    var atp = "";
-    if (d.at_place) {
-      if (d.at_place.linked_today) {
-        atp = '<div class="card"><div class="row"><span>&#128205; At ' +
-          esc(d.at_place.name) + ' today</span>' +
-          (ME && ME.role === "author"
-            ? '<button class="ghostbtn" style="margin:0;padding:4px 10px" ' +
-              'onclick="unmarkVisit(\'' + d.date + '\',\'' + d.at_place.id + '\')">undo</button>'
-            : '<span></span>') +
-          '</div></div>';
-      } else if (ME && ME.role === "author") {
-        atp = '<button class="ghostbtn" onclick="markVisit(\'' + d.date + '\',\'' +
-          d.at_place.id + '\')">&#128205; We&rsquo;re at ' + esc(d.at_place.name) +
-          ' &mdash; mark it</button>';
-      }
-    }
+    // Two dense lines, Andy's spec verbatim: the day, where, how far, and
+    // whether the wheels are turning — then the trip totals. The old stat
+    // boxes and Days Out are gone; nobody marks places anymore (the car
+    // stopping is the record), so the mark-it affordance is gone too.
+    var state = d.moving
+      ? '<span style="color:#1f6f5c">&#9679;</span> Moving &middot; '+d.speed+' mph'
+      : '<span style="color:#a49a8e">&#9679;</span> Parked';
+    var l1 = 'Day '+d.day_number +
+      (d.town ? ' &middot; '+esc(d.town) : '') +
+      ' &middot; '+(d.miles_today||0)+' mi today &middot; ' + state;
+    var l2 = (d.miles_total||0).toLocaleString()+' mi total &middot; ' +
+      (d.mpg ? d.mpg.value+' mpg' : 'mpg after two fills');
+    var kinds = ["gas","food","campsite","lodging","event","journal"];
+    var KLABEL = { gas:"Gas", food:"Food", campsite:"Campsite", lodging:"Lodging",
+                   event:"Event", journal:"Journal" };
+    var grid = (ME && ME.role==="author")
+      ? '<div class="grid" style="margin-top:14px">' + kinds.map(function(k){
+          var act = k === "journal" ? "openJot()" : "saveStop(\'"+k+"\')";
+          var ic = k === "journal" ? "&#9997;" : ICON[k];
+          return '<div class="kind" onclick="'+act+'"><span class="ic">'+ic+
+                 '</span><span class="lb">'+KLABEL[k]+'</span></div>';
+        }).join("") + '</div>'
+      : '';
     el("s-today").innerHTML =
-      live +
-      '<h1>Day '+d.day_number+'</h1><p class="sub">'+fmtDay(d.date)+'</p>' +
-      '<div class="stats">' +
-        '<div class="stat"><span>'+(d.miles_today||0)+'</span><small>miles today</small></div>' +
-        '<div class="stat"><span>'+(d.miles_total||0)+'</span><small>miles total</small></div>' +
-        mpg +
-        '<div class="stat"><span>'+d.day_number+'</span><small>days out</small></div>' +
-      '</div>' + atp + tonight + last +
-      (ME && ME.role==="author"
-        ? '<div class="actionbar"><button class="bigbtn" onclick="openStop()">Record a stop</button></div>'
-        : '');
+      '<h1 style="font-size:19px;line-height:1.35">'+l1+'</h1>' +
+      '<p class="sub">'+l2+'</p>' +
+      grid + tonight + last;
+  });
+}
+
+/* Quick journal capture from the Today grid — the gesture that used to be an
+   "observation" stop. Same artifact either way (a timestamped, located note
+   in their own words), so the two write paths merged; old observation rows
+   still render everywhere they always did. */
+function openJot(){
+  show("stop");
+  el("s-stop").innerHTML =
+    '<button class="back" onclick="tab(\'today\')">&larr;</button>' +
+    '<h1>Journal</h1><p class="sub">' + fmtTime(new Date().toISOString()) +
+    ' &middot; location comes along automatically</p>' +
+    '<div class="card"><textarea id="jot-body" ' +
+      'placeholder="What is happening out there?"></textarea></div>' +
+    '<div class="actionbar"><button class="bigbtn" onclick="saveJot()">Save</button></div>';
+  var t = el("jot-body"); if (t) t.focus();
+}
+function saveJot(){
+  var t = el("jot-body"); if (!t || !t.value.trim()) { tab("today"); return; }
+  var body = t.value;
+  withLocation(function(loc){
+    var payload = { body: body, written_at: new Date().toISOString(), tz_offset: tzOffset() };
+    if (loc) { payload.lat = loc.lat; payload.lon = loc.lon; }
+    send("/api/journal", "POST", payload).then(function(r){
+      if (!r || !r.ok) { alertInline(t, "Couldn\'t save — try again."); return; }
+      tab("today");
+    });
   });
 }
 
@@ -559,13 +579,10 @@ function loadDay(date){
         '</p><div class="row" style="margin-top:9px"><span class="tiny">'+esc(j.author||"")+
         ' &middot; '+fmtTime(j.written_at)+'</span>'+delBtn("journal", j.id)+'</div></div>';
     }).join("");
+    // Derived from where the car stopped — nothing to add or remove by hand.
     var placeRows = (d.places||[]).map(function(p){
-      return '<div class="card"><div class="row"><span>&#128205; '+esc(p.name)+'</span>' +
-        (ME && ME.role==="author"
-          ? '<button class="ghostbtn" style="margin:0;padding:4px 10px" ' +
-            'onclick="unmarkVisit(\''+date+'\',\''+esc(p.id)+'\')">remove</button>'
-          : '<span></span>') +
-        '</div></div>';
+      return '<div class="card tapme" onclick="loadPlace(\''+esc(p.id)+'\',\'trip\')">' +
+        '<div class="row"><span>&#128205; '+esc(p.name)+'</span><span></span></div></div>';
     }).join("");
     el("s-day").innerHTML =
       '<button class="back" onclick="tab(\'trip\')">&larr;</button>' +
@@ -583,10 +600,7 @@ function loadDay(date){
           d.photos.map(function(p){ PHOTO_META[p.id] = p; return photoThumbHtml(p, "day"); }).join("") +
           '</div>'
         : '') +
-      '<h2>Places</h2>' + (placeRows || '<p class="empty">No place marked for this day.</p>') +
-      (ME && ME.role==="author"
-        ? '<button class="ghostbtn" onclick="openPlacePicker(\''+date+'\')">Mark a place for this day</button>' +
-          '<div id="place-picker"></div>' : '') +
+      '<h2>Places</h2>' + (placeRows || '<p class="empty">The car didn\'t stop near a planned place this day.</p>') +
       '<h2>Journal</h2>' + (journal || '<p class="empty">Nothing written yet.</p>') +
       (ME && ME.role==="author"
         ? '<div class="card" style="margin-top:9px"><textarea id="j-body" placeholder="What happened today?"></textarea>' +
@@ -595,30 +609,7 @@ function loadDay(date){
   });
 }
 
-/* ---- linking a day to a place (/api/visit): the write that makes an
-   intention "visited". Both gestures land here — the Today one-tap and the
-   Day screen's picker for marking past days. ---- */
-function markVisit(date, id){
-  send("/api/visit", "POST", { date: date, intention_id: id }).then(function(r){
-    if (r && r.ok) { if (el("s-day").classList.contains("on")) loadDay(date); else loadToday(); }
-  });
-}
-function unmarkVisit(date, id){
-  send("/api/visit", "DELETE", { date: date, intention_id: id }).then(function(r){
-    if (r && r.ok) { if (el("s-day").classList.contains("on")) loadDay(date); else loadToday(); }
-  });
-}
-function openPlacePicker(date){
-  get("/api/places").then(function(d){
-    if (!d || !d.places) return;
-    var opts = d.places.map(function(p){
-      return '<option value="'+esc(p.id)+'">'+esc(p.name)+'</option>';
-    }).join("");
-    el("place-picker").innerHTML =
-      '<div class="card"><select id="pp-sel" style="width:100%;padding:9px;font-size:15px">'+opts+'</select>' +
-      '<button class="ghostbtn" onclick="markVisit(\''+date+'\', el(\'pp-sel\').value)">Mark it</button></div>';
-  });
-}
+
 
 /* Two bugs lived here. The entry carried no tz_offset, so the server defaulted
    to Central and anything written after ~7pm once they were in Mountain or
@@ -674,34 +665,6 @@ function alertInline(field, msg){
 /* One stream: written entries and observation stops, interleaved by time.
    The capture gestures differ — a thumb at 70mph versus a picnic table at
    dusk — but what comes out is the same thing and reads as one narrative. */
-function loadJournal(){
-  show("journal");
-  get("/api/journal-feed").then(function(d){
-    if (!d) { offlineInto("s-journal", "loadJournal()"); return; }
-    var body = d.entries.map(function(e){
-      var tag = e.source === "observation"
-        ? '<span class="badge" style="font-size:11px;padding:3px 9px">' + ICON.observation + ' seen</span>'
-        : '';
-      return '<div class="card"><div class="row"><span class="tiny">' +
-        fmtShort(e.date) + ' &middot; ' + fmtTime(e.written_at) +
-        (e.author ? ' &middot; ' + esc(e.author) : '') + '</span>' + tag + '</div>' +
-        '<p style="margin:8px 0 0;font-size:15px;line-height:1.5">' + esc(e.body) + '</p>' +
-        (e.place ? '<p class="tiny" style="margin:6px 0 0">' + esc(e.place) + '</p>' : '') +
-        '<div style="text-align:right;margin-top:2px">' +
-          delBtn(e.source === "observation" ? "observation" : "journal", e.id) + '</div>' +
-        '</div>';
-    }).join("");
-
-    el("s-journal").innerHTML = '<h1>Journal</h1><p class="sub">' +
-      (d.entries.length ? d.entries.length + ' entr' + (d.entries.length===1?'y':'ies') +
-        ' &middot; written and seen, together' : 'Nothing written yet') + '</p>' +
-      (ME && ME.role === "author"
-        ? '<div class="card"><textarea id="jf-body" placeholder="What happened today?"></textarea>' +
-          '<button class="ghostbtn" onclick="saveJournalFeed()">Save entry</button></div>' : '') +
-      (body || '<p class="empty">Anything they write, and any observation they log with a note, shows up here.</p>');
-  });
-}
-
 function saveJournalFeed(){
   var t = el("jf-body"); if(!t || !t.value.trim()) return;
   var body = t.value;
@@ -710,7 +673,7 @@ function saveJournalFeed(){
     if (loc) { payload.lat = loc.lat; payload.lon = loc.lon; }
     send("/api/journal","POST",payload).then(function(r){
       if (!r || !r.ok) { alertInline(t, "Couldn't save — try again."); return; }
-      loadJournal();
+      loadPhotos();
     });
   });
 }
@@ -844,13 +807,46 @@ function photoThumbHtml(p, from){
 }
 
 var PHOTO_META = {};
+/* Photos and journal, one stream, grouped by day — pictures and words
+   together. This is the trip reading itself back; the eventual viewbook is
+   this screen with better paper. */
 function loadPhotos(){
   show("photos");
-  get("/api/photos").then(function(d){
+  Promise.all([get("/api/photos"), get("/api/journal-feed")]).then(function(res){
+    var d = res[0], j = res[1];
     if (!d) { offlineInto("s-photos", "loadPhotos()"); return; }
     PHOTO_META = {};
     d.photos.forEach(function(p){ PHOTO_META[p.id] = p; });
-    var grid = d.photos.map(function(p){ return photoThumbHtml(p, "photos"); }).join("");
+
+    var byDate = {};
+    d.photos.forEach(function(p){
+      var k = p.date || (p.taken_at||"").slice(0,10) || "undated";
+      (byDate[k] = byDate[k] || { photos:[], words:[] }).photos.push(p);
+    });
+    ((j && j.entries) || []).forEach(function(e){
+      var k = e.date || "undated";
+      (byDate[k] = byDate[k] || { photos:[], words:[] }).words.push(e);
+    });
+
+    var dates = Object.keys(byDate).sort().reverse();
+    var stream = dates.map(function(dt){
+      var g = byDate[dt];
+      var photos = g.photos.length
+        ? '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">' +
+          g.photos.map(function(p){ return photoThumbHtml(p, "photos"); }).join("") + '</div>'
+        : '';
+      var words = g.words.map(function(e){
+        var tag = e.source === "observation"
+          ? '<span class="badge" style="font-size:11px;padding:3px 9px">' + ICON.observation + ' seen</span>' : '';
+        return '<div class="card"><div class="row"><span class="tiny">' +
+          fmtTime(e.written_at) + (e.author ? ' &middot; ' + esc(e.author) : '') + '</span>' + tag + '</div>' +
+          '<p style="margin:8px 0 0;font-size:15px;line-height:1.5">' + esc(e.body) + '</p>' +
+          '<div style="text-align:right;margin-top:2px">' +
+            delBtn(e.source === "observation" ? "observation" : "journal", e.id) + '</div></div>';
+      }).join("");
+      return '<h2>' + fmtDay(dt) + '</h2>' + photos + words;
+    }).join("");
+
     var uploader = (ME && ME.role === "author")
       ? '<input type="file" id="ph-files" accept="image/*" multiple style="display:none" ' +
           'onchange="uploadPhotos(this.files)">' +
@@ -858,15 +854,21 @@ function loadPhotos(){
           'onclick="el(\'ph-files\').click()">Add photos</button></div>' +
         '<div id="ph-progress"></div>'
       : '';
-    el("s-photos").innerHTML = '<h1>Photos</h1><p class="sub">' +
-      (d.photos.length ? d.photos.length + ' so far' : 'None yet') + '</p>' +
-      '<div id="ph-viewer"></div>' +
-      (d.photos.length
-        ? '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">' + grid + '</div>'
-        : '<p class="empty">Tap Add photos and pick from the camera roll — the whole trip so far, all at once, is fine.</p>') +
+    var composer = (ME && ME.role === "author")
+      ? '<div class="card"><textarea id="jf-body" placeholder="What happened today?"></textarea>' +
+        '<button class="ghostbtn" onclick="saveJournalFeed()">Save entry</button></div>'
+      : '';
+    var nP = d.photos.length, nW = ((j && j.entries) || []).length;
+    el("s-photos").innerHTML = '<h1>Photos &amp; Journal</h1><p class="sub">' +
+      (nP || nW ? nP + ' photo' + (nP===1?'':'s') + ' &middot; ' + nW + ' entr' + (nW===1?'y':'ies')
+                : 'Nothing here yet') + '</p>' +
+      '<div id="ph-viewer"></div>' + composer +
+      (stream || '<p class="empty">Photos from the camera roll and anything written — the whole trip, day by day.</p>') +
       uploader;
   });
 }
+function loadJournal(){ loadPhotos(); }
+
 
 function openPhoto(id, key, from){
   var p = PHOTO_META[id] || {};
@@ -1228,6 +1230,15 @@ function basemapOverlays(map, d){
              "text-size":11.5, "text-anchor":"top", "text-offset":[0,0.8], "text-optional":true },
     paint:{ "text-color":"#31435c", "text-halo-color":"#ffffff", "text-halo-width":1.4 } });
 
+  // Where the car itself stopped (>=12 min between trips) — dropped
+  // automatically, nobody taps anything. THE marker, per Andy, literally.
+  map.addSource("vstops", { type:"geojson", data: feats(
+    (d.vehicle_stops||[]).filter(function(v){ return v.lat != null; }),
+    function(v){ return { date:v.date||"", mins:v.mins, ongoing:v.ongoing?1:0, at:v.at||"" }; }) });
+  map.addLayer({ id:"vstop-dots", type:"circle", source:"vstops",
+    paint:{ "circle-radius":3.5, "circle-color":"#6b6459",
+            "circle-stroke-color":"#ffffff", "circle-stroke-width":1.2 } });
+
   map.addSource("stops", { type:"geojson", data: feats(d.stops||[], function(s){
     return { kind:s.kind, place:s.place||"", date:s.date||(s.occurred_at||"").slice(0,10) }; }) });
   map.addLayer({ id:"stop-dots", type:"circle", source:"stops",
@@ -1274,6 +1285,17 @@ function basemapOverlays(map, d){
     var f = e.features[0];
     loadPlace(f.properties.id, "map");
   });
+  map.on("click", "vstop-dots", function(e){
+    var f = e.features[0], pr = f.properties;
+    popupAt(f.geometry.coordinates,
+      '<b>Car stopped here</b><br>' +
+      '<span style="font-size:12px;color:#666">' +
+      (pr.ongoing ? 'Still there' : (pr.mins ? 'For ' + (pr.mins >= 60
+        ? Math.floor(pr.mins/60) + 'h ' + (pr.mins%60) + 'm' : pr.mins + ' min') : '')) +
+      (pr.at ? ' &middot; ' + fmtTime(pr.at) : '') + '</span><br>' +
+      '<button class="ghostbtn" style="margin-top:6px" ' +
+        'onclick="loadDay(\''+esc(pr.date)+'\')">Open that day</button>');
+  });
   map.on("click", "stop-dots", function(e){
     var f = e.features[0], pr = f.properties;
     popupAt(f.geometry.coordinates,
@@ -1298,7 +1320,7 @@ function basemapOverlays(map, d){
       '<button class="ghostbtn" style="margin-top:6px" ' +
         'onclick="loadDay(\''+esc(pr.date)+'\')">Open that day</button>');
   });
-  ["place-dots","place-labels","stop-dots","photo-pins","journal-pins"].forEach(function(l){
+  ["place-dots","place-labels","stop-dots","photo-pins","journal-pins","vstop-dots"].forEach(function(l){
     map.on("mouseenter", l, function(){ map.getCanvas().style.cursor = "pointer"; });
     map.on("mouseleave", l, function(){ map.getCanvas().style.cursor = ""; });
   });
@@ -1333,12 +1355,13 @@ function renderBasemap(d){
     '</div>' +
     '<p class="tiny" style="margin-top:9px">' +
       '<span style="color:#14110e">&#9679;</span> home &middot; ' +
-      '<span style="color:#c8621f">&#9679;</span> stops &middot; ' +
+      '<span style="color:#6b6459">&#9679;</span> car stops &middot; ' +
+      '<span style="color:#c8621f">&#9679;</span> recorded stops &middot; ' +
       '<span style="color:#4a6fa5">&#9679;</span> the plan &middot; ' +
-      '<span style="color:#1f6f5c">&#9679;</span> where they are now &middot; ' +
+      '<span style="color:#1f6f5c">&#9679;</span> now &middot; ' +
       '&#128247; photos &middot; &#9999;&#65039; journal &mdash; tap anything to open it</p>';
   var b = trackBounds(d);
-  var opts = { container:"bigmap", style: TILES_BASE + "/style.json",
+  var opts = { container:"bigmap", style: TILES_BASE + "/style.json?v=3",
                minZoom:3, maxZoom:17.5, attributionControl:false };
   if (b) { opts.bounds = b; opts.fitBoundsOptions = { padding: 36 }; }
   else { opts.center = [-98, 42]; opts.zoom = 3.5; }

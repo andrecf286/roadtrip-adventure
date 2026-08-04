@@ -117,30 +117,22 @@ export async function today(env) {
   const ageMin = last ? (Date.now() - new Date(last.ts).getTime()) / 60000 : null;
   const moving = ageMin !== null && ageMin < 6 && (last.speed || 0) > 3;
 
-  // The nearest itinerary place to where the car is right now, so Today can
-  // offer a one-tap "we're here — mark it". Offered, never auto-marked: the
-  // tap is the fact being recorded, and undo exists. 25 mi radius — parks are
-  // geocoded at their centers and the girls can be well inside one while far
-  // from its point. Flat-earth mile approximation is plenty at this scale
-  // (69 mi/deg lat, longitude scaled by cos²; 69² = 4761).
-  let at_place = null;
+  // Nearest town for the header: "Day 9 · Miles City, MT". Prefer somewhere
+  // with a name people know — the biggest town within 8 miles wins; failing
+  // that, whatever is nearest. Corridor-filtered GeoNames, so the scan is
+  // ~2k rows of static data.
+  let town = null;
   if (last) {
-    const cos = Math.cos((last.lat * Math.PI) / 180);
-    const near = await env.roadtrip.prepare(
-      `SELECT i.id, i.name,
-              EXISTS(SELECT 1 FROM day_intention di
-                      WHERE di.date = ?1 AND di.intention_id = i.id) AS linked_today,
-              ((i.lat - ?2) * (i.lat - ?2) * 4761.0 +
-               (i.lon - ?3) * (i.lon - ?3) * ?4) AS d2
-         FROM intention i
-        WHERE i.lat IS NOT NULL AND i.dropped = 0
-        ORDER BY d2 LIMIT 1`
-    ).bind(date, last.lat, last.lon, 4761.0 * cos * cos).first();
-    if (near && near.d2 <= 25 * 25) {
-      at_place = { id: near.id, name: near.name,
-                   distance_mi: Math.round(Math.sqrt(near.d2) * 10) / 10,
-                   linked_today: !!near.linked_today };
+    const cos2 = Math.cos((last.lat * Math.PI) / 180) ** 2;
+    let best = null, bestD2 = Infinity, bigBest = null, bigPop = 0;
+    for (const [name, st, tlat, tlon, pop] of CORRIDOR_TOWNS) {
+      const d2 = (tlat - last.lat) * (tlat - last.lat) * 4761 +
+                 (tlon - last.lon) * (tlon - last.lon) * 4761 * cos2;
+      if (d2 < bestD2) { bestD2 = d2; best = { name, st }; }
+      if (d2 <= 64 && pop > bigPop) { bigPop = pop; bigBest = { name, st }; }
     }
+    const pick = bigBest || best;
+    if (pick && (bigBest || bestD2 <= 40 * 40)) town = pick.name + ", " + pick.st;
   }
 
   const dayNumber = day?.day_number
@@ -163,7 +155,7 @@ export async function today(env) {
       : (next || null),
     planned_tonight: actual ? (next || null) : null,
     last_stop: lastStop || null,
-    at_place,
+    town,
   });
 }
 
@@ -198,16 +190,31 @@ export async function trip(env) {
     (stopsByDate[s.date] = stopsByDate[s.date] || []).push({ kind: s.kind, place: s.place });
   for (const d of days.results) d.stop_list = stopsByDate[d.date] || [];
 
+  // Visited-ness is DERIVED from where the car actually stopped (see
+  // vehicleStops/derivedVisits) — nothing is marked by hand anymore.
+  const [visits, names] = await Promise.all([
+    derivedVisits(env),
+    env.roadtrip.prepare(`SELECT id, name FROM intention`).all(),
+  ]);
+  const nameOf = {};
+  for (const n of names.results) nameOf[n.id] = n.name;
+  const everVisited = new Set();
+  for (const d of Object.keys(visits)) for (const id of visits[d]) everVisited.add(id);
+  for (const d of days.results) {
+    const v = visits[d.date];
+    d.places = v ? [...v].map((id) => nameOf[id]).filter(Boolean).join(", ") : null;
+  }
+
   // Faded, undated, ordered by Lily's original sequence. These are hopes.
   // Nothing here is ever marked late, missed, or overdue.
-  const ahead = await env.roadtrip.prepare(
+  const aheadAll = await env.roadtrip.prepare(
     `SELECT i.id, i.name, i.kind, i.planned_arrival, i.planned_nights, i.drive_time_from_prev,
             (SELECT COUNT(*) FROM activity a WHERE a.intention_id = i.id) AS activities,
             (SELECT COUNT(*) FROM reservation r WHERE r.intention_id = i.id AND r.booked = 1) AS booked
        FROM intention i
-      WHERE NOT EXISTS (SELECT 1 FROM day_intention di WHERE di.intention_id = i.id)
-        AND i.dropped = 0
-      ORDER BY i.seq LIMIT 8`).all();
+      WHERE i.dropped = 0
+      ORDER BY i.seq`).all();
+  const ahead = { results: aheadAll.results.filter((i) => !everVisited.has(i.id)).slice(0, 8) };
 
   return json({
     departure: meta.departure_date,
@@ -238,11 +245,17 @@ export async function day(env, date, person) {
       `SELECT t.transaction_id, t.gps, t.distance, t.start_time, t.end_time
          FROM trips t JOIN v_segment_local v ON v.transaction_id = t.transaction_id
         WHERE v.local_date = ? ORDER BY t.start_time`).bind(date).all(),
-    // eslint-disable-next-line no-unused-vars
-    env.roadtrip.prepare(
-      `SELECT i.id, i.name FROM day_intention di JOIN intention i ON i.id = di.intention_id
-        WHERE di.date = ?`).bind(date).all(),
+    // Derived, not marked: places whose 25-mile circle the car stopped in
+    // that day (computed below, after the parallel batch).
+    Promise.resolve({ results: [] }),
   ]);
+  const dayVisits = (await derivedVisits(env))[date];
+  if (dayVisits && dayVisits.size) {
+    const q = [...dayVisits].map(() => "?").join(",");
+    places.results = (await env.roadtrip.prepare(
+      `SELECT id, name FROM intention WHERE id IN (` + q + `)`)
+      .bind(...dayVisits).all()).results;
+  }
 
   return json({
     date,
@@ -274,7 +287,7 @@ export async function place(env, id) {
       `SELECT id, name, provider, cost, booked, confirmation, site,
               check_in_at, check_out_at, cancel_by, url, notes
          FROM reservation WHERE intention_id = ? ORDER BY booked DESC, cost`).bind(id).all(),
-    env.roadtrip.prepare(`SELECT date FROM day_intention WHERE intention_id = ? ORDER BY date`).bind(id).all(),
+    derivedVisits(env),
   ]);
   if (!intention) return json({ error: "not found" }, 404);
 
@@ -282,17 +295,20 @@ export async function place(env, id) {
     intention,
     activities: activities.results,
     reservations: reservations.results,
-    visited_on: days.results.map((r) => r.date),
+    visited_on: Object.keys(days).filter((d) => days[d].has(id)).sort(),
   });
 }
 
 export async function places(env) {
-  const rows = await env.roadtrip.prepare(
-    `SELECT i.id, i.name, i.kind, i.seq, i.planned_arrival, i.planned_nights,
-            (SELECT COUNT(*) FROM activity a WHERE a.intention_id = i.id) AS wanted,
-            (SELECT COUNT(*) FROM activity a WHERE a.intention_id = i.id AND a.done = 1) AS did,
-            EXISTS(SELECT 1 FROM day_intention di WHERE di.intention_id = i.id) AS visited
-       FROM intention i ORDER BY i.seq`).all();
+  const [rows, visited] = await Promise.all([
+    env.roadtrip.prepare(
+      `SELECT i.id, i.name, i.kind, i.seq, i.planned_arrival, i.planned_nights,
+              (SELECT COUNT(*) FROM activity a WHERE a.intention_id = i.id) AS wanted,
+              (SELECT COUNT(*) FROM activity a WHERE a.intention_id = i.id AND a.done = 1) AS did
+         FROM intention i ORDER BY i.seq`).all(),
+    visitedSetAll(env),
+  ]);
+  for (const r of rows.results) r.visited = visited.has(r.id) ? 1 : 0;
   return json({ places: rows.results });
 }
 
@@ -392,7 +408,112 @@ export async function map(env, person) {
     places: places.results,
     photos: photos.results,
     journal: journalPts.results,
+    vehicle_stops: await vehicleStops(env),
   });
+}
+
+/* ------------------------------------------- vehicle stops & derived visits */
+
+/* Andy, 2026-08-04, taken literally: "vehicle stop, a marker gets dropped —
+   itinerary places marking goes away." Nobody marks anything. The car
+   stopping IS the record: a marker derives from every between-trips gap of
+   >= 12 minutes, and a place counts as visited when the car (or a recorded
+   stop) held still within 25 miles of it. day_intention and /api/visit stay
+   in the schema as fossils; nothing reads them for truth anymore. Because
+   this is derived at read time over ALL trips, the first two days backfilled
+   themselves the moment it shipped. */
+
+let VSTOP_CACHE = null;
+
+async function vehicleStops(env) {
+  const [trips, lastPts] = await Promise.all([
+    env.roadtrip.prepare(
+      `SELECT t.transaction_id, t.start_time, t.end_time, t.time_zone, t.gps, t.distance
+         FROM trips t, trip_meta m
+        WHERE t.start_time >= m.trip_start_at
+        ORDER BY t.start_time`).all(),
+    // Last breadcrumb per trip: truer than a truncated polyline's last vertex.
+    env.roadtrip.prepare(
+      `SELECT tp.transaction_id, tp.lat, tp.lon, MAX(tp.ts) AS ts
+         FROM track_points tp
+         JOIN trips t ON t.transaction_id = tp.transaction_id, trip_meta m
+        WHERE t.start_time >= m.trip_start_at
+        GROUP BY tp.transaction_id`).all(),
+  ]);
+  const rows = trips.results;
+  const key = rows.length + ":" + (rows.length ? rows[rows.length - 1].end_time : "");
+  if (VSTOP_CACHE && VSTOP_CACHE.key === key) return VSTOP_CACHE.stops;
+
+  const lastCrumb = {};
+  for (const p of lastPts.results) lastCrumb[p.transaction_id] = p;
+
+  const stops = [];
+  for (let i = 0; i < rows.length; i++) {
+    const t = rows[i];
+    if (!t.end_time) continue; // trip in progress: the car has not stopped
+    const nextStart = i + 1 < rows.length ? rows[i + 1].start_time : null;
+    const mins = Math.round(
+      ((nextStart ? new Date(nextStart) : new Date()) - new Date(t.end_time)) / 60000);
+    if (mins < 12) continue; // traffic lights and gas-and-go are not "stopped"
+    let lat = null, lon = null;
+    const crumb = lastCrumb[t.transaction_id];
+    if (crumb) { lat = crumb.lat; lon = crumb.lon; }
+    else {
+      const line = thinnedTrack(t.gps, 4000);
+      if (line.length) { lon = line[line.length - 1][0]; lat = line[line.length - 1][1]; }
+    }
+    if (lat == null) continue;
+    stops.push({
+      at: t.end_time,
+      date: localDate(t.end_time, t.time_zone || "-0500"),
+      lat, lon,
+      mins: nextStart ? mins : null, // null = still there
+      ongoing: !nextStart,
+    });
+  }
+  VSTOP_CACHE = { key, stops };
+  return stops;
+}
+
+/** date -> Set(intention_id), derived from vehicle stops and recorded stops
+    within 25 mi of a geocoded itinerary place. */
+async function derivedVisits(env) {
+  const [vstops, userStops, intents] = await Promise.all([
+    vehicleStops(env),
+    env.roadtrip.prepare(
+      `SELECT date, lat, lon FROM stop WHERE lat IS NOT NULL AND lon IS NOT NULL`).all(),
+    env.roadtrip.prepare(
+      `SELECT id, lat, lon FROM intention WHERE lat IS NOT NULL AND dropped = 0`).all(),
+  ]);
+  const R2MI = 25 * 25;
+  const visits = {}; // date -> Set of intention ids
+  const mark = (date, lat, lon) => {
+    if (!date || lat == null) return;
+    const cos2 = Math.cos((lat * Math.PI) / 180) ** 2;
+    for (const it of intents.results) {
+      const d2 = (it.lat - lat) * (it.lat - lat) * 4761 +
+                 (it.lon - lon) * (it.lon - lon) * 4761 * cos2;
+      if (d2 <= R2MI) (visits[date] = visits[date] || new Set()).add(it.id);
+    }
+  };
+  for (const s of vstops) mark(s.date, s.lat, s.lon);
+  for (const s of userStops.results) mark(s.date, s.lat, s.lon);
+  return visits;
+}
+
+/** Flat helpers over the derivation. */
+async function visitedSetAll(env) {
+  const v = await derivedVisits(env);
+  const all = new Set();
+  for (const d of Object.keys(v)) for (const id of v[d]) all.add(id);
+  return all;
+}
+async function firstVisitDates(env) {
+  const v = await derivedVisits(env);
+  const first = {};
+  for (const d of Object.keys(v).sort())
+    for (const id of v[d]) if (!(id in first)) first[id] = d;
+  return first;
 }
 
 /* ----------------------------------------------------------------- photos */
@@ -479,6 +600,7 @@ export async function deletePhoto(env, person, body) {
 /* ----------------------------------------------------------------- badges */
 
 import { STATE_POLYS } from "./geo_states_named.js";
+import { CORRIDOR_TOWNS } from "./geo_towns.js";
 
 // Precomputed bounding boxes make the point-in-state test cheap: most points
 // skip most states on the bbox alone.
@@ -528,11 +650,16 @@ export async function badges(env) {
     // point is a fix every few miles, plenty to notice a border.
     env.roadtrip.prepare(
       `SELECT lat, lon, ts FROM track_points WHERE (rowid % 15) = 0 ORDER BY ts`).all(),
-    env.roadtrip.prepare(
-      `SELECT i.id, i.name, MIN(di.date) AS first_date
-         FROM day_intention di JOIN intention i ON i.id = di.intention_id
-        WHERE i.kind = 'park'
-        GROUP BY i.id, i.name ORDER BY first_date`).all(),
+    (async () => {
+      const [first, parkRows] = await Promise.all([
+        firstVisitDates(env),
+        env.roadtrip.prepare(`SELECT id, name FROM intention WHERE kind = 'park'`).all(),
+      ]);
+      return { results: parkRows.results
+        .filter((p) => p.id in first)
+        .map((p) => ({ id: p.id, name: p.name, first_date: first[p.id] }))
+        .sort((a, b) => (a.first_date < b.first_date ? -1 : 1)) };
+    })(),
     env.roadtrip.prepare(`SELECT * FROM v_trip_mileage`).first(),
     env.roadtrip.prepare(
       `SELECT COUNT(*) AS n FROM stop WHERE kind = 'gas' AND gallons IS NOT NULL`).first(),

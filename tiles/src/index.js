@@ -34,9 +34,9 @@ class R2Source {
 // One PMTiles instance per isolate per archive; its internal header/directory
 // cache is what makes warm tile reads a single R2 range request.
 const ARCHIVES = {};
-function archive(env, name) {
-  if (!ARCHIVES[name]) ARCHIVES[name] = new PMTiles(new R2Source(env, name + "-z14.pmtiles"));
-  return ARCHIVES[name];
+function archive(env, key) {
+  if (!ARCHIVES[key]) ARCHIVES[key] = new PMTiles(new R2Source(env, key));
+  return ARCHIVES[key];
 }
 
 const cors = {
@@ -79,7 +79,15 @@ export default {
       const hit = await cache.match(request);
       if (hit) return hit;
       let t;
-      try { t = await archive(env, "corridor").getZxy(z, x, y); }
+      try {
+        t = await archive(env, "corridor-z14.pmtiles").getZxy(z, x, y);
+        // Off-corridor at national zooms: fall back to the US-wide z0-8
+        // archive so the fit view has no bald rectangle where the corridor
+        // doesn't reach (the "gray box"). Above z8 off-corridor stays empty
+        // on purpose — the corridor is the map.
+        if ((!t || !t.data) && z <= 8)
+          t = await archive(env, "us-z8.pmtiles").getZxy(z, x, y);
+      }
       catch (e) { return new Response("tile error: " + e.message, { status: 500, headers: cors }); }
       if (!t || !t.data) {
         // Off-corridor tile: empty 204 keeps MapLibre quiet instead of erroring.
