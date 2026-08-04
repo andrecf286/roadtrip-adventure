@@ -282,6 +282,26 @@ function loadToday(){
         (d.last_stop.gallons?'<p class="tiny" style="margin:6px 0 0">'+d.last_stop.gallons+' gal'+
           (d.last_stop.cost?' &middot; $'+d.last_stop.cost.toFixed(2):'')+'</p>':'')+'</div>'
       : '';
+    // The one write that was missing: linking today to a place. Offered when
+    // the car is near a geocoded itinerary place; the tap IS the record, and
+    // undo exists. This is what feeds "Coming up", the reached count, and the
+    // badges — an unmarked day has to be reconstructed from the track later.
+    var atp = "";
+    if (d.at_place) {
+      if (d.at_place.linked_today) {
+        atp = '<div class="card"><div class="row"><span>&#128205; At ' +
+          esc(d.at_place.name) + ' today</span>' +
+          (ME && ME.role === "author"
+            ? '<button class="ghostbtn" style="margin:0;padding:4px 10px" ' +
+              'onclick="unmarkVisit(\'' + d.date + '\',\'' + d.at_place.id + '\')">undo</button>'
+            : '<span></span>') +
+          '</div></div>';
+      } else if (ME && ME.role === "author") {
+        atp = '<button class="ghostbtn" onclick="markVisit(\'' + d.date + '\',\'' +
+          d.at_place.id + '\')">&#128205; We&rsquo;re at ' + esc(d.at_place.name) +
+          ' &mdash; mark it</button>';
+      }
+    }
     el("s-today").innerHTML =
       live +
       '<h1>Day '+d.day_number+'</h1><p class="sub">'+fmtDay(d.date)+'</p>' +
@@ -290,7 +310,7 @@ function loadToday(){
         '<div class="stat"><span>'+(d.miles_total||0)+'</span><small>miles total</small></div>' +
         mpg +
         '<div class="stat"><span>'+d.day_number+'</span><small>days out</small></div>' +
-      '</div>' + tonight + last +
+      '</div>' + atp + tonight + last +
       (ME && ME.role==="author"
         ? '<div class="actionbar"><button class="bigbtn" onclick="openStop()">Record a stop</button></div>'
         : '');
@@ -489,6 +509,14 @@ function loadDay(date){
         '</p><div class="row" style="margin-top:9px"><span class="tiny">'+esc(j.author||"")+
         ' &middot; '+fmtTime(j.written_at)+'</span>'+delBtn("journal", j.id)+'</div></div>';
     }).join("");
+    var placeRows = (d.places||[]).map(function(p){
+      return '<div class="card"><div class="row"><span>&#128205; '+esc(p.name)+'</span>' +
+        (ME && ME.role==="author"
+          ? '<button class="ghostbtn" style="margin:0;padding:4px 10px" ' +
+            'onclick="unmarkVisit(\''+date+'\',\''+esc(p.id)+'\')">remove</button>'
+          : '<span></span>') +
+        '</div></div>';
+    }).join("");
     el("s-day").innerHTML =
       '<button class="back" onclick="tab(\'trip\')">&larr;</button>' +
       '<h1>Day '+(s.day_number||"")+'</h1><p class="sub">'+fmtDay(date)+
@@ -499,11 +527,40 @@ function loadDay(date){
         '<div class="stat"><span>'+(s.photos||0)+'</span><small>photos</small></div>' +
         '<div class="stat"><span>'+d.segments.length+'</span><small>drives</small></div>' +
       '</div>' +
+      '<h2>Places</h2>' + (placeRows || '<p class="empty">No place marked for this day.</p>') +
+      (ME && ME.role==="author"
+        ? '<button class="ghostbtn" onclick="openPlacePicker(\''+date+'\')">Mark a place for this day</button>' +
+          '<div id="place-picker"></div>' : '') +
       '<h2>Journal</h2>' + (journal || '<p class="empty">Nothing written yet.</p>') +
       (ME && ME.role==="author"
         ? '<div class="card" style="margin-top:9px"><textarea id="j-body" placeholder="What happened today?"></textarea>' +
           '<button class="ghostbtn" onclick="saveJournal(\''+date+'\')">Save entry</button></div>' : '') +
       '<h2>Stops</h2>' + stops;
+  });
+}
+
+/* ---- linking a day to a place (/api/visit): the write that makes an
+   intention "visited". Both gestures land here — the Today one-tap and the
+   Day screen's picker for marking past days. ---- */
+function markVisit(date, id){
+  send("/api/visit", "POST", { date: date, intention_id: id }).then(function(r){
+    if (r && r.ok) { if (el("s-day").classList.contains("on")) loadDay(date); else loadToday(); }
+  });
+}
+function unmarkVisit(date, id){
+  send("/api/visit", "DELETE", { date: date, intention_id: id }).then(function(r){
+    if (r && r.ok) { if (el("s-day").classList.contains("on")) loadDay(date); else loadToday(); }
+  });
+}
+function openPlacePicker(date){
+  get("/api/places").then(function(d){
+    if (!d || !d.places) return;
+    var opts = d.places.map(function(p){
+      return '<option value="'+esc(p.id)+'">'+esc(p.name)+'</option>';
+    }).join("");
+    el("place-picker").innerHTML =
+      '<div class="card"><select id="pp-sel" style="width:100%;padding:9px;font-size:15px">'+opts+'</select>' +
+      '<button class="ghostbtn" onclick="markVisit(\''+date+'\', el(\'pp-sel\').value)">Mark it</button></div>';
   });
 }
 

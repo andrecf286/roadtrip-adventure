@@ -111,6 +111,32 @@ export async function today(env) {
   const ageMin = last ? (Date.now() - new Date(last.ts).getTime()) / 60000 : null;
   const moving = ageMin !== null && ageMin < 6 && (last.speed || 0) > 3;
 
+  // The nearest itinerary place to where the car is right now, so Today can
+  // offer a one-tap "we're here — mark it". Offered, never auto-marked: the
+  // tap is the fact being recorded, and undo exists. 25 mi radius — parks are
+  // geocoded at their centers and the girls can be well inside one while far
+  // from its point. Flat-earth mile approximation is plenty at this scale
+  // (69 mi/deg lat, longitude scaled by cos²; 69² = 4761).
+  let at_place = null;
+  if (last) {
+    const cos = Math.cos((last.lat * Math.PI) / 180);
+    const near = await env.roadtrip.prepare(
+      `SELECT i.id, i.name,
+              EXISTS(SELECT 1 FROM day_intention di
+                      WHERE di.date = ?1 AND di.intention_id = i.id) AS linked_today,
+              ((i.lat - ?2) * (i.lat - ?2) * 4761.0 +
+               (i.lon - ?3) * (i.lon - ?3) * ?4) AS d2
+         FROM intention i
+        WHERE i.lat IS NOT NULL AND i.dropped = 0
+        ORDER BY d2 LIMIT 1`
+    ).bind(date, last.lat, last.lon, 4761.0 * cos * cos).first();
+    if (near && near.d2 <= 25 * 25) {
+      at_place = { id: near.id, name: near.name,
+                   distance_mi: Math.round(Math.sqrt(near.d2) * 10) / 10,
+                   linked_today: !!near.linked_today };
+    }
+  }
+
   const dayNumber = day?.day_number
     ?? Math.floor((new Date(date) - new Date(meta.departure_date)) / 86400000) + 1;
 
@@ -131,6 +157,7 @@ export async function today(env) {
       : (next || null),
     planned_tonight: actual ? (next || null) : null,
     last_stop: lastStop || null,
+    at_place,
   });
 }
 
