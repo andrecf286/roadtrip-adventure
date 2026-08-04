@@ -1364,13 +1364,14 @@ function basemapOverlays(map, d){
 
   map.addSource("photopins", { type:"geojson", data: feats(d.photos||[], function(p){
     return { id:p.id, thumb:p.thumb_key||"", date:p.date||"" }; }) });
+  var pinSize = ["interpolate", ["linear"], ["zoom"], 4, 0.55, 8, 0.9, 12, 1.3, 15, 1.7];
   map.addLayer({ id:"photo-pins", type:"symbol", source:"photopins",
-    layout:{ "icon-image":"pin-photo", "icon-size":0.75, "icon-allow-overlap":true } });
+    layout:{ "icon-image":"pin-photo", "icon-size":pinSize, "icon-allow-overlap":true } });
 
   map.addSource("journalpins", { type:"geojson", data: feats(d.journal||[], function(j){
     return { id:j.id, date:j.date||"", excerpt:j.excerpt||"", author:j.author||"" }; }) });
   map.addLayer({ id:"journal-pins", type:"symbol", source:"journalpins",
-    layout:{ "icon-image":"pin-journal", "icon-size":0.75, "icon-allow-overlap":true } });
+    layout:{ "icon-image":"pin-journal", "icon-size":pinSize, "icon-allow-overlap":true } });
 
   /* Everything on the map opens the thing it stands for. */
   function popupAt(coord, html){

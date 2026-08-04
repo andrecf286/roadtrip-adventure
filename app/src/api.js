@@ -62,6 +62,49 @@ function thinnedTrack(gpsText, max) {
   } catch { return []; }
 }
 
+/** Path length in miles of [lon,lat] points (flat-earth, fine at this scale). */
+function pathMilesOf(pts) {
+  let mi = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = (pts[i][0] - pts[i-1][0]) * 69 * Math.cos((pts[i][1] * Math.PI) / 180);
+    const dy = (pts[i][1] - pts[i-1][1]) * 69;
+    mi += Math.sqrt(dx * dx + dy * dy);
+  }
+  return mi;
+}
+
+/** The car's position at a moment, from the breadcrumb nearest in time —
+    within a tolerance, else null. This is what locates a photo whose EXIF
+    GPS was stripped (iOS web uploads) but whose timestamp survived. */
+async function positionAt(env, iso, toleranceMin) {
+  const t = new Date(iso).getTime();
+  if (!t) return null;
+  const near = await env.roadtrip.prepare(
+    `SELECT lat, lon, ts FROM track_points
+      ORDER BY ABS(strftime('%s', ts) - strftime('%s', ?)) LIMIT 1`).bind(iso).first();
+  if (near && Math.abs(new Date(near.ts).getTime() - t) / 60000 <= toleranceMin)
+    return { lat: near.lat, lon: near.lon };
+  // No breadcrumb near in TIME usually means the car was PARKED (breadcrumbs
+  // only flow while driving). If the moment falls between one trip's end and
+  // the next trip's start, the car sat at the earlier trip's last position —
+  // the campground, the trailhead lot — which is the right guess for a photo
+  // taken from camp.
+  const prev = await env.roadtrip.prepare(
+    `SELECT transaction_id, end_time FROM trips
+      WHERE end_time IS NOT NULL AND strftime('%s', end_time) <= strftime('%s', ?)
+      ORDER BY end_time DESC LIMIT 1`).bind(iso).first();
+  if (!prev) return null;
+  const nextStart = await env.roadtrip.prepare(
+    `SELECT start_time FROM trips
+      WHERE strftime('%s', start_time) > strftime('%s', ?)
+      ORDER BY start_time LIMIT 1`).bind(prev.end_time).first();
+  if (nextStart && new Date(nextStart.start_time).getTime() < t) return null; // driving, just no crumbs
+  const parked = await env.roadtrip.prepare(
+    `SELECT lat, lon FROM track_points WHERE transaction_id = ?
+      ORDER BY ts DESC LIMIT 1`).bind(prev.transaction_id).first();
+  return parked ? { lat: parked.lat, lon: parked.lon } : null;
+}
+
 async function tripMeta(env) {
   return env.roadtrip.prepare("SELECT * FROM trip_meta WHERE id = 1").first();
 }
@@ -135,6 +178,20 @@ export async function today(env) {
     if (pick && (bigBest || bestD2 <= 40 * 40)) town = pick.name + ", " + pick.st;
   }
 
+  // v_day_summary only sums COMPLETED trips (distance lands at tripEnd), so
+  // the number froze mid-drive — confusing at 70 mph. Add the live path
+  // length of today's distance-less trips from their breadcrumbs.
+  let liveMiles = 0;
+  const openTrips = await env.roadtrip.prepare(
+    `SELECT t.transaction_id FROM trips t, trip_meta m
+      WHERE t.start_time >= m.trip_start_at AND t.distance IS NULL`).all();
+  for (const t of openTrips.results) {
+    const pts = await env.roadtrip.prepare(
+      `SELECT lon, lat FROM track_points WHERE transaction_id = ? ORDER BY ts`).bind(t.transaction_id).all();
+    liveMiles += pathMilesOf(pts.results.map((r) => [r.lon, r.lat]));
+  }
+  const milesToday = Math.round(((day?.miles ?? 0) + liveMiles) * 10) / 10;
+
   const dayNumber = day?.day_number
     ?? Math.floor((new Date(date) - new Date(meta.departure_date)) / 86400000) + 1;
 
@@ -145,8 +202,8 @@ export async function today(env) {
     moving,
     speed: moving ? Math.round(last.speed) : null,
     fuel_level: last?.fuel_level ?? null,
-    miles_today: day?.miles ?? 0,
-    miles_total: total?.miles ?? 0,
+    miles_today: milesToday,
+    miles_total: Math.round(((total?.miles ?? 0) + liveMiles) * 10) / 10,
     mpg: mpg ? { value: mpg.mpg, method: mpg.method, miles: mpg.miles, gallons: mpg.gallons } : null,
     tonight: actual
       ? { id: actual.id, name: actual.place || (actual.kind === "campsite" ? "Camped" : "Stayed"),
@@ -534,8 +591,15 @@ export async function uploadPhoto(env, person, request) {
   const takenAt = (form.get("taken_at") || nowIso()).toString();
   const offset = (form.get("tz_offset") || "-0500").toString();
   const date = localDate(takenAt, offset);
-  const lat = form.get("lat") ? Number(form.get("lat")) : null;
-  const lon = form.get("lon") ? Number(form.get("lon")) : null;
+  let lat = form.get("lat") ? Number(form.get("lat")) : null;
+  let lon = form.get("lon") ? Number(form.get("lon")) : null;
+  if (lat == null) {
+    // iOS web uploads strip GPS EXIF but keep the timestamp; the car's
+    // breadcrumbs know where it was at that moment (20-minute tolerance —
+    // beyond that they might have hiked well away from the recorded track).
+    const p = await positionAt(env, takenAt, 20);
+    if (p) { lat = p.lat; lon = p.lon; }
+  }
   const sha = (form.get("sha256") || "").toString() || null;
 
   // Same photo re-sent by a retry: point at the existing row, upload nothing.
