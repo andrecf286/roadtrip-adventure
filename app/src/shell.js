@@ -187,6 +187,21 @@ function flush(){
 }
 window.addEventListener("online", flush);
 
+/* Fixed actionbars float over the content; the gas-stop form's last fields
+   were hiding under Done/Discard. Instead of hand-tuning padding per screen
+   (and forgetting on the next one), watch the DOM: whenever the active
+   screen contains an .actionbar, pad the screen by the bar's real height so
+   everything scrolls clear. New screens inherit the fix by existing. */
+function padForActionbar(){
+  var sc = document.querySelector(".screen.on"); if (!sc) return;
+  var bar = sc.querySelector(".actionbar");
+  var nav = document.querySelector(".navbar");
+  var want = bar ? (bar.offsetHeight + (nav ? nav.offsetHeight : 64) + 18) + "px" : "";
+  if (sc.style.paddingBottom !== want) sc.style.paddingBottom = want;
+}
+new MutationObserver(padForActionbar).observe(document.body, { childList: true, subtree: true });
+window.addEventListener("resize", padForActionbar);
+
 /* The app updates many times a day right now, and open phones kept serving
    the old shell until somebody texted "close it and reopen." The served
    shell hashes itself; when the hash moves, a bar offers one-tap refresh.
