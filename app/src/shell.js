@@ -142,6 +142,20 @@ var ME = null, POS = null;
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+/* Her notes are full of links she found. Split the RAW text on URLs and escape
+   each piece separately — never regex over already-escaped text, which is how
+   the earlier stored-XSS hole opened (an id flowed into an attribute unescaped).
+   Only https?:// can match, so no javascript: URL can survive this. */
+function linkify(s){
+  var out = "", rest = String(s==null?"":s), re = /https?:\/\/[^\s<>"')\]]+/, m;
+  while ((m = re.exec(rest))) {
+    var u = m[0].replace(/[.,;:]+$/, "");
+    out += esc(rest.slice(0, m.index)) +
+      '<a href="'+esc(u)+'" target="_blank" rel="noopener noreferrer">'+esc(u)+'</a>';
+    rest = rest.slice(m.index + u.length);
+  }
+  return out + esc(rest);
+}
 function el(id){ return document.getElementById(id); }
 function get(u){
   return fetch(u,{credentials:"same-origin"})
@@ -1105,6 +1119,14 @@ function uploadPhotos(files){
     if (!f) { done && loadPhotos(); return; }
     f.arrayBuffer().then(function(buf){
       var meta = exifGps(buf);
+      // The server has always been able to dedupe on sha256 and to treat
+      // client_id as an idempotency key — the client just never sent either,
+      // so "tap Add photos to retry those" made a SECOND copy of every photo
+      // that had already succeeded. Both are derived from the original bytes,
+      // so they are stable across any number of retries.
+      return crypto.subtle.digest("SHA-256", buf).then(function(h){
+        var sha = Array.prototype.map.call(new Uint8Array(h), function(b){
+          return ("0"+b.toString(16)).slice(-2); }).join("");
       return createImageBitmap(new Blob([buf]), { imageOrientation: "from-image" })
         .then(function(img){
           return Promise.all([scaleToBlob(img, 1800, 0.82), scaleToBlob(img, 420, 0.75)]);
@@ -1113,6 +1135,8 @@ function uploadPhotos(files){
           var fd = new FormData();
           fd.append("file", blobs[0], "p.jpg");
           fd.append("thumb", blobs[1], "t.jpg");
+          fd.append("sha256", sha);
+          fd.append("client_id", "ph" + sha.slice(0, 40));
           fd.append("tz_offset", tzOffset());
           // EXIF local time + the phone's offset beats file mtime; mtime beats now.
           fd.append("taken_at", meta.taken_local
@@ -1123,6 +1147,7 @@ function uploadPhotos(files){
             .then(function(r){ return r.json(); });
         })
         .then(function(r){ if (r && r.ok) done++; else failed++; note(); next(); });
+      });
     }).catch(function(){ failed++; note(); next(); });
   })();
 }
@@ -1181,6 +1206,17 @@ function loadPlace(id, from){
       (i.drive_time_from_prev?' &middot; '+esc(i.drive_time_from_prev)+' away':'') + '</p>' +
       (d.activities.length ? '<h2>'+d.activities.length+' things she wanted to see</h2>' +
         '<div class="card" style="padding:4px 14px"><ul class="check">'+acts+'</ul></div>' : '') +
+      /* Her research, exactly as she typed it into the vault — newlines and
+         tab indentation intact via pre-wrap, because the shape of the list IS
+         her thinking. Never normalise this into prose. */
+      /* NOT class="hers" — that is styled for a one-line aside next to an
+         activity (italic, small, accent-coloured). Her place notes run to
+         ~800 characters and up to 3,800; the same styling makes a wall.
+         Left rule in the accent colour says "hers"; the body reads as body. */
+      (i.notes ? '<h2>Her notes</h2><div class="card" style="border-left:3px solid var(--sun)">' +
+        '<p style="margin:0;color:var(--ink-2);font-size:14.5px;line-height:1.6;' +
+        'white-space:pre-wrap;word-break:break-word">' +
+        linkify(i.notes)+'</p></div>' : '') +
       (res ? '<h2>Staying / getting in</h2>'+res : '');
   });
 }
