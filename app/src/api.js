@@ -583,6 +583,73 @@ async function firstVisitDates(env) {
 
 /* ----------------------------------------------------------------- photos */
 
+/** Server-to-server photo ingest — the shared door for sources that are not
+    a person tapping a button in the app. The browser upload authenticates by
+    session cookie and is author-gated, which a background job on Andy's Mac
+    (or, later, an inbound-email Worker) cannot satisfy: it is acting FOR a
+    person, not AS one. So this path carries a shared secret and names its
+    author explicitly.
+
+    Placement policy lives with the CALLER, deliberately. EXIF GPS is used
+    whenever present, for anyone. The breadcrumb fallback runs only when the
+    caller sets `backfill=1`, which it does only for photos taken by someone
+    who was actually in the car — otherwise a parent's un-geotagged photo from
+    home would be placed on the route, which is worse than no pin at all. */
+export async function ingestPhoto(env, request) {
+  const secret = request.headers.get("x-ingest-secret") || "";
+  if (!env.INGEST_SECRET || secret !== env.INGEST_SECRET)
+    return json({ error: "unauthorized" }, 401);
+
+  let form;
+  try { form = await request.formData(); }
+  catch { return json({ error: "multipart form required" }, 400); }
+  const file = form.get("file"), thumb = form.get("thumb");
+  if (!file || typeof file === "string") return json({ error: "file required" }, 400);
+
+  const authorId = (form.get("author_id") || "").toString();
+  const author = await env.roadtrip
+    .prepare(`SELECT id FROM person WHERE id = ?`).bind(authorId).first();
+  if (!author) return json({ error: "unknown author_id" }, 400);
+
+  const id = safeId((form.get("client_id") || "").toString() || null);
+  const takenAt = (form.get("taken_at") || nowIso()).toString();
+  const offset = (form.get("tz_offset") || "-0500").toString();
+  const date = localDate(takenAt, offset);
+
+  let lat = form.get("lat") ? Number(form.get("lat")) : null;
+  let lon = form.get("lon") ? Number(form.get("lon")) : null;
+  if (lat == null && form.get("backfill") === "1") {
+    const p = await positionAt(env, takenAt, 20);
+    if (p) { lat = p.lat; lon = p.lon; }
+  }
+
+  const sha = (form.get("sha256") || "").toString() || null;
+  if (sha) {
+    const dupe = await env.roadtrip
+      .prepare(`SELECT id FROM photo WHERE sha256 = ?`).bind(sha).first();
+    if (dupe) return json({ ok: true, id: dupe.id, dupe: true });
+  }
+
+  const key = "photos/" + date + "/" + id + ".jpg";
+  const thumbKey = "thumbs/" + id + ".jpg";
+  await env.PHOTOS.put(key, file.stream(), {
+    httpMetadata: { contentType: "image/jpeg" } });
+  if (thumb && typeof thumb !== "string")
+    await env.PHOTOS.put(thumbKey, thumb.stream(), {
+      httpMetadata: { contentType: "image/jpeg" } });
+
+  await env.roadtrip.prepare(
+    `INSERT OR IGNORE INTO photo
+       (id, date, taken_at, tz_offset, lat, lon, r2_key, thumb_key,
+        width, height, mime, sha256, caption, author_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'image/jpeg', ?, ?, ?, ?)`
+  ).bind(id, date, takenAt, offset, lat, lon, key,
+         (thumb && typeof thumb !== "string") ? thumbKey : null,
+         sha, (form.get("caption") || "").toString().slice(0, 300) || null,
+         authorId, nowIso()).run();
+  return json({ ok: true, id, lat, lon, placed: lat != null ? (form.get("lat") ? "exif" : "track") : "none" });
+}
+
 /** Upload one photo: multipart form with `file` (resized JPEG), `thumb`
     (small JPEG), and metadata fields. The client resizes BEFORE upload —
     campground wifi carries ~300KB, not a 12MP original. sha256 dedupes

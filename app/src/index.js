@@ -97,6 +97,12 @@ export default {
       if (!person) return json({ error: "unauthorized" }, 401);
       return api.uploadPhoto(env, person, request);
     }
+    // Server-to-server ingest (Mac iMessage puller; later, inbound email).
+    // Secret-gated, names its own author — no session cookie involved.
+    if (path === "/api/ingest/photo") {
+      if (request.method !== "POST") return json({ error: "POST only" }, 405);
+      return api.ingestPhoto(env, request);
+    }
     if (path === "/api/badge/upload") {
       if (!person) return json({ error: "unauthorized" }, 401);
       return api.uploadBadge(env, person, request);
