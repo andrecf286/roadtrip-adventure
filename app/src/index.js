@@ -37,7 +37,7 @@ async function shellVersion() {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
@@ -146,7 +146,7 @@ export default {
           if (request.method === "DELETE") return api.deleteStop(env, person, body);
           return request.method === "PATCH"
             ? api.updateStop(env, person, body)
-            : api.createStop(env, person, body);
+            : api.createStop(env, person, body, ctx);
         case "/api/journal":
           return request.method === "DELETE"
             ? api.deleteJournal(env, person, body)

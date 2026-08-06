@@ -128,6 +128,17 @@ export const SHELL = String.raw`<!DOCTYPE html>
   /* Fixed, like the offline-queue banner, because a viewer can touch a control
      on five different screens and the line has to land the same way on all of
      them. */
+  /* Alerts are the only red in the app. Everything else here is warm paper and
+     orange; a Red Flag Warning has to not look like the rest of the trip. */
+  .wxalert{border-radius:12px;padding:10px 12px;margin:0 0 10px;cursor:pointer;
+    border:1px solid;line-height:1.35}
+  .wxalert.bad{background:#fdecea;border-color:#e3a49c;color:#7d1f14}
+  .wxalert.warn{background:#fdf3e3;border-color:#e6c48c;color:#7a5210}
+  .wxalert .tiny{color:inherit;opacity:.72}
+  .wxbody{display:none}
+  .wxalert.open .wxbody{display:block}
+  .wxmore{margin-top:2px;opacity:.7}
+  .wxalert.open .wxmore{display:none}
   .denytoast{position:fixed;left:50%;transform:translateX(-50%);
     bottom:calc(var(--nav-h) + var(--safe-bot) + 12px);width:min(92vw,420px);z-index:60;
     background:rgba(20,12,6,.94);color:#fff;border-radius:13px;padding:11px 14px;
@@ -311,6 +322,41 @@ function fmtShort(ds){ if(!ds) return ""; var d=new Date(ds+"T12:00:00");
   return d.toLocaleDateString([], {month:"short", day:"numeric"}); }
 /* Andy's words, lightly corrected. "Click" became "tap" — this app has only
    ever been opened on a phone. */
+/* WMO weather codes. Open-Meteo returns a number; a person wants a picture and
+   three words. Codes are sparse and grouped rather than continuous, so this is
+   a lookup with a range fallback rather than arithmetic. Night swaps only the
+   clear-sky glyph — a moon over a thunderstorm is a worse lie than a sun. */
+var WMO = {
+  0:["Clear","&#9728;&#65039;","&#127761;"], 1:["Mostly clear","&#127780;&#65039;","&#127761;"],
+  2:["Partly cloudy","&#9925;","&#9925;"],   3:["Overcast","&#9729;&#65039;","&#9729;&#65039;"],
+  45:["Fog","&#127787;&#65039;"], 48:["Freezing fog","&#127787;&#65039;"],
+  51:["Light drizzle","&#127782;&#65039;"], 53:["Drizzle","&#127782;&#65039;"], 55:["Heavy drizzle","&#127782;&#65039;"],
+  56:["Freezing drizzle","&#127784;&#65039;"], 57:["Freezing drizzle","&#127784;&#65039;"],
+  61:["Light rain","&#127782;&#65039;"], 63:["Rain","&#127783;&#65039;"], 65:["Heavy rain","&#127783;&#65039;"],
+  66:["Freezing rain","&#127784;&#65039;"], 67:["Freezing rain","&#127784;&#65039;"],
+  71:["Light snow","&#127784;&#65039;"], 73:["Snow","&#127784;&#65039;"], 75:["Heavy snow","&#127784;&#65039;"],
+  77:["Snow grains","&#127784;&#65039;"],
+  80:["Showers","&#127782;&#65039;"], 81:["Showers","&#127783;&#65039;"], 82:["Downpour","&#127783;&#65039;"],
+  85:["Snow showers","&#127784;&#65039;"], 86:["Snow showers","&#127784;&#65039;"],
+  95:["Thunderstorm","&#9928;&#65039;"], 96:["Thunderstorm, hail","&#9928;&#65039;"], 99:["Thunderstorm, hail","&#9928;&#65039;"]
+};
+function wx(code, isDay){
+  if (code == null) return null;
+  var e = WMO[code];
+  if (!e) {
+    // Unknown code: keep the decade's meaning rather than printing a number.
+    if (code >= 95) e = ["Thunderstorm","&#9928;&#65039;"];
+    else if (code >= 71) e = ["Snow","&#127784;&#65039;"];
+    else if (code >= 51) e = ["Rain","&#127782;&#65039;"];
+    else e = ["Cloudy","&#9729;&#65039;"];
+  }
+  return { word: e[0], icon: (isDay === false && e[2]) ? e[2] : e[1] };
+}
+/* Temperatures render as whole degrees. Nobody on a road trip has ever wanted
+   the tenth of a degree, and 90.4 next to 28.5 mpg reads as a second decimal
+   quantity rather than as weather. */
+function degF(t){ return t == null ? "" : Math.round(t) + "&deg;"; }
+
 var PROMPT = {
   gas:      "Got gas? Tap me!",
   food:     "Eat something? Tell us about it!",
@@ -338,6 +384,36 @@ function paintHero(){
 /* Tapping the picture deals another one. It used to open the photo full size;
    Andy would rather it shuffle, and photos are still openable from the
    Memories tab. */
+/* Tap to read the forecaster's instruction. Collapsed by default: the alert
+   itself is the news, and three paragraphs of all-caps advisory prose above the
+   trip title every time Today loads would train everyone to scroll past it. */
+/* NWS timestamps carry their OWN offset ("...T21:00:00-06:00") and that is the
+   right clock to read them on: the warning is about a place, and a Fire Weather
+   Watch over Montana ends at nine in the evening in Montana no matter whose
+   phone is looking. Rendering it through the device clock produced "until 3:00
+   AM" for an alert ending Saturday evening — right instant, useless sentence.
+   The weekday appears whenever the end is not today in that same local zone,
+   because "until 9:00 PM" for something two days out is a small lie. */
+function alertUntil(iso){
+  if (!iso) return "";
+  var m = /([+-])(\d{2}):?(\d{2})$/.exec(iso);
+  var offMin = m ? (m[1] === "-" ? -1 : 1) * (parseInt(m[2],10)*60 + parseInt(m[3],10)) : 0;
+  var end = new Date(new Date(iso).getTime() + offMin*60000);
+  var now = new Date(Date.now() + offMin*60000);
+  var h = end.getUTCHours(), mm = end.getUTCMinutes();
+  var ampm = h >= 12 ? "PM" : "AM", h12 = h % 12 === 0 ? 12 : h % 12;
+  var t = h12 + ":" + (mm < 10 ? "0" : "") + mm + " " + ampm;
+  var DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  var sameDay = end.getUTCFullYear() === now.getUTCFullYear() &&
+                end.getUTCMonth() === now.getUTCMonth() &&
+                end.getUTCDate() === now.getUTCDate();
+  return sameDay ? t : DOW[end.getUTCDay()] + " " + t;
+}
+function toggleAlert(i){
+  var b = el("wxb-"+i); if (!b) return;
+  var card = b.parentNode;
+  card.classList.toggle("open");
+}
 function openHero(){
   if (!HERO.length) { tab("memories"); return; }
   HERO_I++;
@@ -662,11 +738,24 @@ function loadToday(){
     var state = d.moving
       ? '<span style="color:#1f6f5c">&#9679;</span> Moving &middot; '+d.speed+' mph'
       : '<span style="color:#a49a8e">&#9679;</span> Parked';
+    /* Live conditions ride on l1, which is the where-they-are-right-now line —
+       day, town, miles today, moving or parked. The temperature belongs with
+       those and not with the cumulative totals underneath. */
+    var w = d.weather ? wx(d.weather.code, d.weather.is_day) : null;
     var l1 = 'Day '+d.day_number +
       (d.town ? ' &middot; '+esc(d.town) : '') +
-      ' &middot; '+(d.miles_today||0)+' mi today &middot; ' + state;
+      ' &middot; '+(d.miles_today||0)+' mi today &middot; ' + state +
+      (w ? ' &middot; '+w.icon+' '+degF(d.weather.temp_f) : '');
+    /* Fuel goes right after mpg, per Andy. Suppressed past six hours: Bouncie
+       reports a level on its own cadence, and a stale percentage on a screen
+       that says "Parked" reads as current when it is not — worse than absent. */
+    var fuelBit = "";
+    if (d.fuel && d.fuel.level != null &&
+        Date.now() - new Date(d.fuel.at).getTime() < 6*3600000) {
+      fuelBit = ' &middot; &#9981; '+Math.round(d.fuel.level)+'% fuel';
+    }
     var l2 = (d.miles_total||0).toLocaleString()+' mi total &middot; ' +
-      (d.mpg ? d.mpg.value+' mpg' : 'mpg after two fills');
+      (d.mpg ? d.mpg.value+' mpg' : 'mpg after two fills') + fuelBit;
     var kinds = ["gas","food","campsite","lodging","event","journal"];
     var KLABEL = { gas:"Gas", food:"Food", campsite:"Campsite", lodging:"Lodging",
                    event:"Event", journal:"Journal" };
@@ -728,7 +817,31 @@ function loadToday(){
     // Hourly, and again at every stop — so the picture is different when they
     // get out of the car even if an hour has not passed.
     HERO_I = Math.floor(Date.now() / 3600000) + (d.cycle || 0);
-    el("s-today").innerHTML =
+    /* NWS alerts are the one part of this feature that is not decoration, so
+       they go ABOVE the title rather than into a metric line. A Red Flag
+       Warning is not a number about the trip; it is a thing two teenagers in a
+       tent should know. Tap to read what the forecaster says to do. */
+    var alerts = (d.alerts||[]).map(function(a,i){
+      var sev = (a.severity === "Extreme" || a.severity === "Severe") ? "bad" : "warn";
+      /* Collapsed is deliberately ONE line. The first build put areaDesc in the
+         resting banner and NWS returns every county and ranger district in the
+         zone — 176px of a 844px screen, pushing the trip title below the fold
+         on a screen whose job is the trip. The county list is real information
+         for deciding whether you are inside the warning, so it moves into the
+         body where somebody who taps has asked for it. */
+      return '<div class="wxalert '+sev+'" onclick="toggleAlert('+i+')">' +
+        '<div class="row"><b>&#9888;&#65039; '+esc(a.event)+'</b>' +
+        (a.ends ? '<span class="tiny">until '+alertUntil(a.ends)+'</span>' : '') + '</div>' +
+        '<div class="wxbody" id="wxb-'+i+'">' +
+          (a.headline ? '<p style="margin:7px 0 0;font-size:13px">'+esc(a.headline)+'</p>' : '') +
+          (a.instruction ? '<p style="margin:7px 0 0;font-size:13px;line-height:1.45">'+esc(a.instruction)+'</p>' : '') +
+          (a.area ? '<p class="tiny" style="margin:7px 0 0">'+esc(a.area)+'</p>' : '') +
+          '<p class="tiny" style="margin:7px 0 0">National Weather Service</p>' +
+        '</div>' +
+        '<div class="tiny wxmore">Tap for what it says</div></div>';
+    }).join("");
+
+    el("s-today").innerHTML = alerts +
       '<div class="blingwrap"><h1 class="blingtitle">'+tripTitle()+'</h1></div>' +
       '<h1 style="font-size:19px;line-height:1.35">'+l1+'</h1>' +
       '<p class="sub">'+l2+'</p>' +
@@ -1033,9 +1146,19 @@ function loadDay(date){
     if (!d) { offlineInto("s-day", "loadDay('"+date+"')"); return; }
     var s = d.summary || {};
     var stops = d.stops.map(function(x){
+      /* The weather this stop happened in, frozen at the moment of the tap.
+         This is the reading that survives to the viewbook — "gas in Miles
+         City, 4:12pm, 101 degrees" is the sentence worth keeping. */
+      var sw = wx(x.weather_code);
+      var wline = sw ? '<p class="tiny" style="margin:6px 0 0">'+sw.icon+' '+esc(sw.word)+
+          (x.temp_f != null ? ' &middot; '+degF(x.temp_f) : '') +
+          (x.feels_f != null && Math.abs(x.feels_f - x.temp_f) >= 4 ? ' (felt '+degF(x.feels_f)+')' : '') +
+          (x.wind_mph != null ? ' &middot; '+Math.round(x.wind_mph)+' mph wind' : '') +
+        '</p>' : '';
       return '<div class="card"><div class="row"><span>'+(ICON[x.kind]||"")+' '+esc(x.kind)+
         (x.place?' &middot; '+esc(x.place):'')+'</span><span class="tiny">'+fmtTime(x.occurred_at)+
-        '</span></div>'+(x.note?'<p class="tiny" style="margin:6px 0 0">'+esc(x.note)+'</p>':'')+'</div>';
+        '</span></div>'+(x.note?'<p class="tiny" style="margin:6px 0 0">'+esc(x.note)+'</p>':'')+
+        wline+'</div>';
     }).join("") || '<p class="empty">No stops recorded.</p>';
     var journal = d.journal.map(function(j){
       return '<div class="card"><p style="margin:0;font-size:15px;line-height:1.5">'+esc(j.body)+
@@ -1977,7 +2100,9 @@ function basemapOverlays(map, d){
       '<div class="popbody">' +
         '<div class="popt">'+(ICON[pr.kind]||"")+' '+esc(pr.place || pr.kind)+'</div>' +
         '<div class="popm">'+dayLine(pr.date)+
-          (pr.occurred_at ? ' &middot; '+fmtTime(pr.occurred_at) : '')+'</div>' +
+          (pr.occurred_at ? ' &middot; '+fmtTime(pr.occurred_at) : '')+
+          (wx(pr.weather_code)
+            ? ' &middot; '+wx(pr.weather_code).icon+' '+degF(pr.temp_f) : '')+'</div>' +
         (dayPlace(pr.date) ? '<div class="popm">'+esc(dayPlace(pr.date))+'</div>' : '') +
         '<div class="pophint">Tap the pin again to open the day &rarr;</div>' +
       '</div>');

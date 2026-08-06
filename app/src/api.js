@@ -125,6 +125,8 @@ async function tripMeta(env) {
   return env.roadtrip.prepare("SELECT * FROM trip_meta WHERE id = 1").first();
 }
 
+import { currentAt, alertsAt, archiveAt, attachToStop } from "./weather.js";
+
 /* ------------------------------------------------------------------ today */
 
 export async function today(env) {
@@ -134,11 +136,29 @@ export async function today(env) {
     .prepare(`SELECT ts, lat, lon, speed, fuel_level FROM track_points ORDER BY ts DESC LIMIT 1`)
     .first();
 
+  /* Bouncie sends fuel on its own cadence, not with every breadcrumb — only
+     2,702 of 22,731 points carry a level. Reading it off `last` (the newest
+     point of any kind) therefore returns null roughly seven times in eight,
+     which is why this field has been in the payload since day one and has
+     never once rendered. Ask for the freshest non-null reading instead, and
+     carry its timestamp so the client can hold its tongue when the number is
+     old enough to be a lie. */
+  const fuel = await env.roadtrip
+    .prepare(`SELECT fuel_level, ts FROM track_points
+               WHERE fuel_level IS NOT NULL ORDER BY ts DESC LIMIT 1`).first();
+
   const offset = (await env.roadtrip
     .prepare(`SELECT time_zone FROM trips WHERE time_zone IS NOT NULL ORDER BY start_time DESC LIMIT 1`)
     .first())?.time_zone || "-0500";
 
   const date = localDate(nowIso(), offset);
+
+  /* Both fail soft to null / [] and both are cached at the edge, so this adds
+     no upstream call on the overwhelming majority of Today pulls. */
+  const [weatherNow, weatherAlerts] = await Promise.all([
+    currentAt(last?.lat ?? null, last?.lon ?? null),
+    alertsAt(last?.lat ?? null, last?.lon ?? null),
+  ]);
 
   const [day, total, mpg, next, lastStop] = await Promise.all([
     env.roadtrip.prepare(`SELECT * FROM v_day_summary WHERE date = ?`).bind(date).first(),
@@ -255,7 +275,12 @@ export async function today(env) {
     position: last ? { lat: last.lat, lon: last.lon, at: last.ts, stale_minutes: Math.round(ageMin) } : null,
     moving,
     speed: moving ? Math.round(last.speed) : null,
-    fuel_level: last?.fuel_level ?? null,
+    fuel: fuel ? { level: fuel.fuel_level, at: fuel.ts } : null,
+    /* Live, where the car is. Deliberately NOT stored anywhere: nobody will
+       want to know in October what the dashboard said at 3pm on a Tuesday.
+       The readings that get kept are the ones frozen onto stops. */
+    weather: weatherNow,
+    alerts: weatherAlerts,
     miles_today: milesToday,
     miles_total: Math.round(((total?.miles ?? 0) + liveMiles) * 10) / 10,
     mpg: mpg ? { value: mpg.mpg, method: mpg.method, miles: mpg.miles, gallons: mpg.gallons } : null,
@@ -352,7 +377,8 @@ export async function day(env, date, person) {
   const [summary, stops, photos, journal, segments, places] = await Promise.all([
     env.roadtrip.prepare(`SELECT * FROM v_day_summary WHERE date = ?`).bind(date).first(),
     env.roadtrip.prepare(
-      `SELECT id, kind, place, note, occurred_at, lat, lon, cost, gallons, price_per_gallon
+      `SELECT id, kind, place, note, occurred_at, lat, lon, cost, gallons, price_per_gallon,
+              weather_code, temp_f, feels_f, wind_mph, humidity
          FROM stop WHERE date = ? ORDER BY occurred_at`).bind(date).all(),
     env.roadtrip.prepare(
       `SELECT id, r2_key, thumb_key, caption, taken_at, lat, lon, author_id
@@ -467,7 +493,7 @@ export async function map(env, person) {
         WHERE t.start_time >= m.trip_start_at AND (tp.rowid % 4) = 0
         ORDER BY tp.transaction_id, tp.ts`).all(),
     env.roadtrip.prepare(
-      `SELECT id, kind, place, lat, lon, occurred_at, date FROM stop
+      `SELECT id, kind, place, lat, lon, occurred_at, date, weather_code, temp_f FROM stop
         WHERE lat IS NOT NULL AND lon IS NOT NULL ORDER BY occurred_at`).all(),
     env.roadtrip.prepare(`SELECT lat, lon, ts FROM track_points ORDER BY ts DESC LIMIT 1`).first(),
     env.roadtrip.prepare(`SELECT * FROM v_trip_mileage`).first(),
@@ -1073,7 +1099,7 @@ export async function deleteBadge(env, person, body) {
 
 /* ------------------------------------------------------------------ write */
 
-export async function createStop(env, person, body) {
+export async function createStop(env, person, body, ctx) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   const kinds = ["gas", "food", "campsite", "lodging", "event", "observation"];
   if (!kinds.includes(body.kind)) return json({ error: "bad kind" }, 400);
@@ -1107,6 +1133,17 @@ export async function createStop(env, person, body) {
     body.cost ?? null, body.gallons ?? null, body.price_per_gallon ?? null,
     person.id, nowIso()
   ).run();
+
+  /* The weather this stop happened in, fetched in the background.
+     waitUntil(), NOT await: recording a stop has to stay under five seconds at
+     a gas pump, and putting a third party on the write path would mean an
+     Open-Meteo outage makes Lily's Gas button feel broken. The row is complete
+     the moment it is written; the reading lands a second or two later, which
+     is soon enough for the Day screen and the map and forever soon enough for
+     the viewbook. If it never lands, the stop is still a stop. */
+  if (ctx && lat != null && lon != null) {
+    ctx.waitUntil(currentAt(lat, lon).then((w) => attachToStop(env, id, w)).catch(() => {}));
+  }
 
   return json({ ok: true, id });
 }
