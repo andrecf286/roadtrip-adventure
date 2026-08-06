@@ -221,11 +221,33 @@ export async function today(env) {
   // costing more than it caught: Lily's camp shots arrive with GPS stripped by
   // her phone and no breadcrumb close enough to place them, so the pictures
   // most worth showing were the ones being excluded.
+  //
+  // Dropping the filter alone did NOT put them back, which is the part that
+  // only shows up if you check: ORDER BY taken_at DESC LIMIT 40 had already
+  // aged them out — her camp shots are day one and there were fifty photos by
+  // day five. "Most recent 40" was a fine proxy for "the trip" at a dozen
+  // photos and stops being one immediately. So the set is now an even stride
+  // across everything, newest first, capped at sixty: rn = 1, 1+stride,
+  // 1+2*stride … which always includes the newest photo and always spans the
+  // whole trip, however long it gets. Payload SHRANK — id and r2_key were
+  // never read by the client (paintHero uses thumb, date and author only) and
+  // Today re-pulls itself every 90 seconds on campground wifi.
   const heroShots = await env.roadtrip.prepare(
-    `SELECT p.id, p.thumb_key, p.r2_key, p.date, p.taken_at,
-            COALESCE(pe.name, '') AS author
-       FROM photo p LEFT JOIN person pe ON pe.id = p.author_id
-      ORDER BY p.taken_at DESC LIMIT 40`).all();
+    `WITH ranked AS (
+       SELECT p.thumb_key, p.r2_key, p.date, p.taken_at,
+              COALESCE(pe.name, '') AS author,
+              ROW_NUMBER() OVER (ORDER BY p.taken_at DESC) AS rn,
+              COUNT(*) OVER () AS n
+         FROM photo p LEFT JOIN person pe ON pe.id = p.author_id
+     )
+     SELECT thumb_key, r2_key, date, taken_at, author
+       FROM ranked
+      -- (rn - 1), not rn: with sixty or fewer photos the stride is 1 and
+      -- "rn % 1 = 1" matches NOTHING, because rn % 1 is always 0. That shipped
+      -- to production and emptied the Today photo for one deploy cycle. The
+      -- offset form degenerates correctly — stride 1 selects every row.
+      WHERE (rn - 1) % MAX(1, (n + 59) / 60) = 0
+      ORDER BY taken_at DESC`).all();
 
   return json({
     date,
@@ -255,8 +277,8 @@ export async function today(env) {
     // Today so the screen costs one request, not two.
     // author and taken_at ride along so the parents' version of the Today
     // screen can caption the picture with who took it and when.
-    hero: heroShots.results.map((h) => ({ id: h.id, thumb: h.thumb_key || h.r2_key,
-      key: h.r2_key, date: h.date, taken_at: h.taken_at, author: h.author })),
+    hero: heroShots.results.map((h) => ({ thumb: h.thumb_key || h.r2_key,
+      date: h.date, taken_at: h.taken_at, author: h.author })),
   });
 }
 
