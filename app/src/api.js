@@ -959,12 +959,23 @@ export async function badges(env) {
     (async () => {
       const [first, parkRows] = await Promise.all([
         firstVisitDates(env),
-        env.roadtrip.prepare(`SELECT id, name FROM intention WHERE kind = 'park'`).all(),
+        env.roadtrip.prepare(
+          `SELECT id, name, seq FROM intention WHERE kind = 'park' AND dropped = 0`).all(),
       ]);
+      /* ALL thirteen, not just the ones reached. The old screen only listed
+         parks they had already visited, which made sense when a park was a
+         text chip appearing out of nowhere — but the wall now has thirteen
+         posters, and a badge wall whose unearned badges are invisible is just
+         a list of things you already did. Visited first (earliest first), then
+         the ones still ahead in itinerary order; the client greys the latter. */
       return { results: parkRows.results
-        .filter((p) => p.id in first)
-        .map((p) => ({ id: p.id, name: p.name, first_date: first[p.id] }))
-        .sort((a, b) => (a.first_date < b.first_date ? -1 : 1)) };
+        .map((p) => ({ id: p.id, name: p.name, first_date: first[p.id] ?? null, seq: p.seq }))
+        .sort((a, b) => {
+          if (a.first_date && b.first_date) return a.first_date < b.first_date ? -1 : 1;
+          if (a.first_date) return -1;
+          if (b.first_date) return 1;
+          return (a.seq ?? 0) - (b.seq ?? 0);
+        }) };
     })(),
     env.roadtrip.prepare(`SELECT * FROM v_trip_mileage`).first(),
     env.roadtrip.prepare(
@@ -1011,6 +1022,208 @@ export async function badges(env) {
     tanks: { fills: fills?.n ?? 0, earned: Math.floor((fills?.n ?? 0) / 10) },
     bespoke: bespoke.results,
   });
+}
+
+/* ----------------------------------------------------- badge detail sheet */
+
+const round1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
+const round2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
+
+/** state -> first local date, by EXACTLY the derivation badges() uses: every
+    completed trip's polyline thinned to 60 points, plus every 15th live
+    breadcrumb for trips the nightly sweep hasn't given a polyline yet.
+
+    Deliberately duplicated rather than shared, because in badges() this loop
+    lives inside a cache block that also builds the badge SHAPES — work a
+    detail sheet has no use for, and pulling it apart would mean editing the
+    grid everyone already looks at. The cost of the copy is one extra pass
+    over the track; the cost of letting the two screens compute "first day in
+    Montana" differently is that one of them is lying. */
+async function stateFirstDates(env) {
+  const [trips, points] = await Promise.all([
+    env.roadtrip.prepare(
+      `SELECT t.gps, t.start_time, t.time_zone
+         FROM trips t, trip_meta m
+        WHERE t.start_time >= m.trip_start_at AND t.gps IS NOT NULL
+        ORDER BY t.start_time`).all(),
+    env.roadtrip.prepare(
+      `SELECT lat, lon, ts FROM track_points WHERE (rowid % 15) = 0 ORDER BY ts`).all(),
+  ]);
+  const seen = {};
+  for (const t of trips.results) {
+    const day = localDate(t.start_time, t.time_zone || "-0500");
+    for (const [x, y] of thinnedTrack(t.gps, 60)) {
+      const st = stateOfPoint(x, y);
+      if (st && !(st in seen)) seen[st] = day;
+    }
+  }
+  const tz = trips.results.length
+    ? trips.results[trips.results.length - 1].time_zone || "-0500" : "-0500";
+  for (const p of points.results) {
+    const st = stateOfPoint(p.lon, p.lat);
+    if (st && !(st in seen)) seen[st] = localDate(p.ts, tz);
+  }
+  return seen;
+}
+
+async function stateBadgeDetail(env, key) {
+  const [firsts, photoRows, stopRows] = await Promise.all([
+    stateFirstDates(env),
+    env.roadtrip.prepare(
+      `SELECT date, lat, lon FROM photo WHERE lat IS NOT NULL AND lon IS NOT NULL`).all(),
+    env.roadtrip.prepare(
+      `SELECT date, lat, lon FROM stop WHERE lat IS NOT NULL AND lon IS NOT NULL`).all(),
+  ]);
+  // One set for both sources: a day with a photo AND a gas stop in Wyoming is
+  // one day in Wyoming, not two.
+  const days = new Set();
+  let photos = 0, stops = 0;
+  for (const p of photoRows.results)
+    if (stateOfPoint(p.lon, p.lat) === key) { photos++; if (p.date) days.add(p.date); }
+  for (const s of stopRows.results)
+    if (stateOfPoint(s.lon, s.lat) === key) { stops++; if (s.date) days.add(s.date); }
+  return json({
+    kind: "state", key,
+    first_date: firsts[key] ?? null,
+    photos, stops, days: days.size,
+    // Per-state mileage would mean clipping every polyline at every border
+    // crossing. The badge never claims a number, so we don't invent one.
+    miles: null,
+  });
+}
+
+async function parkBadgeDetail(env, key) {
+  const intent = await env.roadtrip.prepare(
+    `SELECT id, name, lat, lon, planned_nights FROM intention WHERE id = ?`).bind(key).first();
+  // The shape below has no way to say "no such park" — `name` is a string in
+  // the contract — so a bad id has to be a status code, not a body of nulls.
+  if (!intent) return json({ error: "not found" }, 404);
+
+  const [first, photoRows, acts, art] = await Promise.all([
+    firstVisitDates(env),
+    env.roadtrip.prepare(
+      `SELECT date, lat, lon FROM photo WHERE lat IS NOT NULL AND lon IS NOT NULL`).all(),
+    env.roadtrip.prepare(
+      `SELECT COUNT(*) AS total, SUM(CASE WHEN done THEN 1 ELSE 0 END) AS done
+         FROM activity WHERE intention_id = ?`).bind(key).first(),
+    // park_badge is keyed on the park's NAME, not the intention id.
+    env.roadtrip.prepare(
+      `SELECT r2_key, credit FROM park_badge WHERE park_name = ?`).bind(intent.name).first(),
+  ]);
+
+  // Same 25-mile disc, and the same flat-earth approximation, that
+  // derivedVisits() uses to decide a place was visited at all — so "photos
+  // here" can never contradict "you were here".
+  let photos = 0;
+  if (intent.lat != null && intent.lon != null) {
+    const cos2 = Math.cos((intent.lat * Math.PI) / 180) ** 2;
+    for (const p of photoRows.results) {
+      const d2 = (p.lat - intent.lat) * (p.lat - intent.lat) * 4761 +
+                 (p.lon - intent.lon) * (p.lon - intent.lon) * 4761 * cos2;
+      if (d2 <= 25 * 25) photos++;
+    }
+  }
+
+  /* A 25-mile disc around a single centroid cannot cover a park that is 70
+     miles across. Theodore Roosevelt proves it: they demonstrably visited on
+     08-05, and the nearest geo-tagged photo is 29.6 mi from the centroid — so
+     "first reached Aug 5, 0 photographs" is a sentence that is both true and a
+     lie. Rather than widen the radius (which would start claiming photographs
+     from the next county), count what can be said honestly: how many pictures
+     were taken on the DAY they were there. It claims proximity in time, which
+     is exactly the claim the data supports. The client prefers "here" when the
+     disc has anything in it and falls back to "that day" when it doesn't. */
+  const visitDate = first[key] ?? null;
+  const photosThatDay = visitDate
+    ? photoRows.results.filter((p) => p.date === visitDate).length : 0;
+
+  return json({
+    kind: "park", key, name: intent.name,
+    first_date: visitDate,
+    photos,
+    photos_that_day: photosThatDay,
+    activities_done: acts?.done ?? 0,
+    activities_total: acts?.total ?? 0,
+    planned_nights: intent.planned_nights ?? null,
+    credit: art?.credit ?? null,
+    image_key: art?.r2_key ?? null,
+  });
+}
+
+async function milesBadgeDetail(env, key) {
+  const n = Number.parseInt(key, 10) || 0; // a junk key degrades to 0, not a 500
+  const milestone = n * 1000;
+  const [days, mileage, extra] = await Promise.all([
+    env.roadtrip.prepare(
+      `SELECT date, day_number, miles FROM v_day_summary ORDER BY date`).all(),
+    env.roadtrip.prepare(`SELECT miles FROM v_trip_mileage`).first(),
+    liveExtraMiles(env),
+  ]);
+  // v_day_summary covers the whole PLANNED itinerary, so every day they
+  // haven't lived yet is already a row with miles NULL. Counting those as 0
+  // keeps the running total honest and stops the crossing day from ever
+  // landing on a date in the future.
+  let run = 0, hit = null;
+  for (const d of days.results) {
+    run += d.miles ?? 0;
+    if (run >= milestone) { hit = d; break; }
+  }
+  return json({
+    kind: "miles", key: n, milestone,
+    date: hit ? hit.date : null,
+    day_number: hit ? hit.day_number : null,
+    // Identical to what badges() reports, live tail included, so the number on
+    // the sheet matches the number on the badge that opened it.
+    miles_total: round1((mileage?.miles ?? 0) + extra),
+  });
+}
+
+async function tankBadgeDetail(env, key) {
+  const n = Number.parseInt(key, 10) || 0;
+  const [totals, cheap, pricey] = await Promise.all([
+    env.roadtrip.prepare(
+      `SELECT COUNT(CASE WHEN gallons IS NOT NULL THEN 1 END) AS fills,
+              SUM(gallons) AS gallons,
+              SUM(cost) AS cost,
+              SUM(CASE WHEN gallons IS NOT NULL AND cost IS NOT NULL THEN cost END) AS paid_cost,
+              SUM(CASE WHEN gallons IS NOT NULL AND cost IS NOT NULL THEN gallons END) AS paid_gallons
+         FROM stop WHERE kind = 'gas'`).first(),
+    env.roadtrip.prepare(
+      `SELECT price_per_gallon AS price, place, date FROM stop
+        WHERE kind = 'gas' AND price_per_gallon IS NOT NULL
+        ORDER BY price_per_gallon ASC, date ASC LIMIT 1`).first(),
+    env.roadtrip.prepare(
+      `SELECT price_per_gallon AS price, place, date FROM stop
+        WHERE kind = 'gas' AND price_per_gallon IS NOT NULL
+        ORDER BY price_per_gallon DESC, date ASC LIMIT 1`).first(),
+  ]);
+  const extreme = (r) =>
+    (r ? { price: round2(r.price), place: r.place ?? null, date: r.date } : null);
+  return json({
+    kind: "tank", key: n, milestone: n * 10,
+    fills: totals?.fills ?? 0,
+    gallons: round1(totals?.gallons),
+    cost: round2(totals?.cost),
+    // Dollars per gallon for the trip, NOT the mean of the pump prices: a
+    // two-gallon splash at a tourist-trap pump would otherwise weigh the same
+    // as a full tank on the interstate. Only fills where both numbers are
+    // known can enter the ratio.
+    avg_price: totals?.paid_gallons ? round2(totals.paid_cost / totals.paid_gallons) : null,
+    cheapest: extreme(cheap),
+    priciest: extreme(pricey),
+  });
+}
+
+/** What you get when you TAP a badge. One endpoint rather than four so the
+    sheet is one fetch and one spinner; `kind` picks the branch. */
+export async function badgeDetail(env, kind, key) {
+  switch (kind) {
+    case "state": return stateBadgeDetail(env, key);
+    case "park":  return parkBadgeDetail(env, key);
+    case "miles": return milesBadgeDetail(env, key);
+    case "tank":  return tankBadgeDetail(env, key);
+    default:      return json({ error: "bad kind" }, 400);
+  }
 }
 
 /** Award a bespoke badge. Deliberately NOT authors-only — this is the one

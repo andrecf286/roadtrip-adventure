@@ -154,6 +154,7 @@ export default {
         case "/api/activity":    return api.toggleActivity(env, person, body);
         case "/api/visit":       return api.linkDayPlace(env, person, body, request.method);
         case "/api/badges":      return api.badges(env);
+        case "/api/badge-detail": return api.badgeDetail(env, url.searchParams.get("kind"), url.searchParams.get("key"));
         case "/api/photo":
           if (request.method === "DELETE") return api.deletePhoto(env, person, body);
           return json({ error: "use /api/photo/upload" }, 400);

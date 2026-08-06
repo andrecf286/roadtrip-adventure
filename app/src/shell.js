@@ -142,6 +142,36 @@ export const SHELL = String.raw`<!DOCTYPE html>
      them. */
   /* Alerts are the only red in the app. Everything else here is warm paper and
      orange; a Red Flag Warning has to not look like the rest of the trip. */
+  /* The badge wall. Every category renders into the SAME tile — family
+     photograph, state outline, park poster, interstate shield, fuel pill — so
+     one grid holds all five and a sixth would need no new layout. Square tiles
+     with contained art rather than cover: a 600x797 park poster and a wide
+     state outline both have to sit in the same box without being cropped into
+     nonsense. */
+  .bwall{display:grid;grid-template-columns:repeat(auto-fill,minmax(98px,1fr));
+    gap:10px;margin:0 0 4px}
+  .btile{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:9px 6px 8px;text-align:center;cursor:pointer;
+    box-shadow:0 2px 8px rgba(80,60,30,.08);transition:transform .12s ease}
+  .btile:active{transform:scale(.96)}
+  .btile .art{height:76px;display:flex;align-items:center;justify-content:center;margin-bottom:5px}
+  .btile .art img{max-width:100%;max-height:76px;object-fit:contain;border-radius:5px;display:block}
+  .btile .art svg{max-height:76px;max-width:100%}
+  .btile .art .glyph{font-size:44px;line-height:1}
+  /* Two lines then ellipsis: "Theodore Roosevelt National Park" must not push
+     its neighbours down the grid. The full name is on the detail screen. */
+  .btile .bname{font-size:11.5px;font-weight:650;line-height:1.2;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .btile .bsub{font-size:10.5px;opacity:.6;margin-top:2px}
+  .btile.locked{opacity:.42}
+  .bdart{display:flex;justify-content:center;margin:4px 0 14px}
+  .bdart img{max-width:100%;max-height:340px;border-radius:14px;display:block;
+    box-shadow:0 4px 18px rgba(80,60,30,.18)}
+  .bdart .glyph{font-size:96px;line-height:1}
+  .bfact{display:flex;justify-content:space-between;gap:12px;padding:9px 0;
+    border-bottom:1px solid var(--line);font-size:14px}
+  .bfact:last-child{border-bottom:0}
+  .bfact b{font-weight:650}
   .wxalert{border-radius:12px;padding:10px 12px;margin:0 0 10px;cursor:pointer;
     border:1px solid;line-height:1.35}
   .wxalert.bad{background:#fdecea;border-color:#e3a49c;color:#7d1f14}
@@ -268,6 +298,7 @@ export const SHELL = String.raw`<!DOCTYPE html>
   <section class="screen" id="s-staying"></section>
   <section class="screen" id="s-memories"></section>
   <section class="screen" id="s-badges"></section>
+  <section class="screen" id="s-badge"></section>
 
   <div class="queued" id="queued"></div>
   <div class="denytoast" id="denytoast"></div>
@@ -1166,6 +1197,12 @@ function loadDay(date){
           (x.temp_f != null ? ' &middot; '+degF(x.temp_f) : '') +
           (x.feels_f != null && Math.abs(x.feels_f - x.temp_f) >= 4 ? ' (felt '+degF(x.feels_f)+')' : '') +
           (x.wind_mph != null ? ' &middot; '+Math.round(x.wind_mph)+' mph wind' : '') +
+          /* Says out loud that this is a snapshot. Today's temperature is live
+             and sits among other live things, so it reads as now; this one sits
+             under a stop from three days ago with nothing to mark it as
+             historical, and Andy did not want a parent taking yesterday's 64
+             degrees for this afternoon's. */
+          '<span style="opacity:.6"> when they stopped</span>' +
         '</p>' : '';
       return '<div class="card"><div class="row"><span>'+(ICON[x.kind]||"")+' '+esc(x.kind)+
         (x.place?' &middot; '+esc(x.place):'')+'</span><span class="tiny">'+fmtTime(x.occurred_at)+
@@ -1286,101 +1323,69 @@ function loadBadges(){
   show("badges");
   get("/api/badges").then(function(d){
     if (!d) { offlineInto("s-badges", "loadBadges()"); return; }
-
-    // Each state badge IS the state: its outline, filled route-green, with
-    // the name and the day they first crossed in.
-    var states = (d.states||[]).map(function(st){
-      var art = '';
-      if (st.shape && st.shape.rings) {
-        var polys = st.shape.rings.map(function(r){
-          return '<polygon points="'+r.map(function(pt){ return pt[0]+','+pt[1]; }).join(' ')+
-            '" fill="#1f6f5c22" stroke="#1f6f5c" stroke-width="2.5" stroke-linejoin="round"/>';
-        }).join('');
-        art = '<svg viewBox="-4 -4 '+(st.shape.w+8)+' '+(st.shape.h+8)+'" ' +
-          'style="width:64px;height:'+Math.round(64*(st.shape.h+8)/(st.shape.w+8))+'px;max-height:72px">'+polys+'</svg>';
-      }
-      return '<div style="width:31%;min-width:96px;text-align:center;padding:10px 4px;' +
-        'background:var(--card);border:1px solid var(--line);border-radius:14px">' + art +
-        '<div style="font-size:12.5px;font-weight:650;margin-top:4px">'+esc(st.state)+'</div>' +
-        '<div class="tiny" style="opacity:.65">'+fmtShort(st.first_date)+'</div></div>';
-    }).join("") || '<p class="empty">No states yet — that changes fast.</p>';
-
-    /* A park with artwork shows the poster; one without keeps the text chip,
-       so the wall fills in as Andy finds them rather than waiting on all 13.
-       onerror falls back too, in case a row outlives its R2 object. */
-    var parkArt = (d.parks||[]).filter(function(p){ return p.image_key; }).map(function(p){
-      return '<figure class="parkposter">' +
-        '<img src="/photo/'+esc(p.image_key)+'" alt="'+esc(p.name)+'" loading="lazy" ' +
-          'onerror="this.closest(\'figure\').className=\'parkposter noart\'">' +
-        '<figcaption>'+esc(p.name)+'<span> &middot; '+fmtShort(p.first_date)+'</span></figcaption>' +
-        '</figure>';
-    }).join("");
-    var parkChips = (d.parks||[]).filter(function(p){ return !p.image_key; }).map(function(p){
-      return '<span class="badge">&#127966; '+esc(p.name)+'<span style="opacity:.6;font-weight:400"> &middot; '+
-        fmtShort(p.first_date)+'</span></span>';
-    }).join("");
-    var parks = (parkArt ? '<div class="parkwall">'+parkArt+'</div>' : '') + parkChips
-      || '<p class="empty">Parks appear when the car stops inside one.</p>';
-
-    // Mile markers as interstate-style shields — red crest, blue field,
-    // white number. A road trip's odometer deserves highway iconography.
-    function mileShield(n){
-      return '<svg viewBox="0 0 100 100" style="width:70px;height:70px">' +
-        '<path d="M50 4 C62 12 80 14 96 12 C99 44 92 76 50 97 C8 76 1 44 4 12 C20 14 38 12 50 4 Z" ' +
-          'fill="#124a8f" stroke="#ffffff" stroke-width="3.5"/>' +
-        '<path d="M50 4 C62 12 80 14 96 12 C96.5 17 96.6 21 96.4 26 L3.6 26 C3.4 21 3.5 17 4 12 C20 14 38 12 50 4 Z" ' +
-          'fill="#b3282d"/>' +
-        '<text x="50" y="21" text-anchor="middle" fill="#fff" font-size="11.5" font-weight="700" ' +
-          'font-family="system-ui,sans-serif" letter-spacing="1">MILES</text>' +
-        '<text x="50" y="65" text-anchor="middle" fill="#fff" font-size="25" font-weight="800" ' +
-          'font-family="system-ui,sans-serif">'+n.toLocaleString()+'</text></svg>';
-    }
-    var miles = "";
-    for (var i = 1; i <= d.miles.earned; i++)
-      miles += '<div style="width:31%;min-width:96px;text-align:center;padding:10px 4px;' +
-        'background:var(--card);border:1px solid var(--line);border-radius:14px">' +
-        mileShield(i*1000) +
-        '<div class="tiny" style="opacity:.65;margin-top:2px">' +
-        (i*1000).toLocaleString()+' miles</div></div>';
-    miles += '<span class="badge" style="opacity:.55;align-self:center">'+d.miles.to_next.toLocaleString()+
-      ' mi to '+((d.miles.earned+1)*1000).toLocaleString()+'</span>';
-
-    var tanks = "";
-    for (var j = 1; j <= d.tanks.earned; j++)
-      tanks += '<span class="badge">&#9981; '+(j*10)+' tanks</span>';
-    tanks += '<span class="badge" style="opacity:.55">'+d.tanks.fills+' fill'+
-      (d.tanks.fills===1?"":"s")+' so far</span>';
-
+    BADGEDATA = d;
     BADGES = {};
+    (d.bespoke||[]).forEach(function(b){ BADGES[b.id] = b; });
+
+    var wall = function(items){ return '<div class="bwall">'+items.join("")+'</div>'; };
+
+    /* Every category collapses to the same call. Before this the screen had
+       five bespoke renderers — full cards for the family ones, a poster wall
+       for parks, inline SVG tiles for states, shields for miles, text pills
+       for tanks — which is why it ran to several screens and why thirteen park
+       posters would have made it unreadable. One tile, five feeders. */
+    function tile(kind, key, art, name, sub, locked){
+      return '<div class="btile'+(locked?' locked':'')+'" ' +
+        'onclick="openBadge(\'' + kind + '\',\'' + esc(String(key)) + '\')">' +
+        '<div class="art">'+art+'</div>' +
+        '<div class="bname">'+esc(name)+'</div>' +
+        (sub ? '<div class="bsub">'+sub+'</div>' : '') + '</div>';
+    }
+
+    var states = (d.states||[]).map(function(st){
+      return tile("state", st.state, stateSvg(st.shape, 70), st.state, fmtShort(st.first_date));
+    });
+
+    /* Every park in Lily's list appears, earned or not. A greyed poster for a
+       park they have not reached yet is the whole point of a badge wall — you
+       can see what is still out there. */
+    var parks = (d.parks||[]).map(function(p){
+      return tile("park", p.id,
+        p.image_key
+          ? '<img src="/photo/'+esc(p.image_key)+'" alt="" loading="lazy">'
+          : '<span class="glyph">&#127966;</span>',
+        p.name, fmtShort(p.first_date), !p.first_date);
+    });
+
+    var miles = [];
+    for (var i = 1; i <= d.miles.earned; i++)
+      miles.push(tile("miles", i, mileShield(i*1000), (i*1000).toLocaleString()+" miles", ""));
+    miles.push(tile("miles", d.miles.earned+1, mileShield((d.miles.earned+1)*1000),
+      ((d.miles.earned+1)*1000).toLocaleString()+" miles",
+      d.miles.to_next.toLocaleString()+" to go", true));
+
+    var tanks = [];
+    for (var j = 1; j <= d.tanks.earned; j++)
+      tanks.push(tile("tank", j, '<span class="glyph">&#9981;</span>', (j*10)+" tanks", ""));
+    tanks.push(tile("tank", d.tanks.earned+1, '<span class="glyph">&#9981;</span>',
+      ((d.tanks.earned+1)*10)+" tanks", d.tanks.fills+" filled", true));
+
     var bespoke = (d.bespoke||[]).map(function(b){
-      BADGES[b.id] = b;
-      // The awarder can always remove their own (delBtn is authors-only, and
-      // a viewer must be able to undo a mistaken award).
-      var mine = ME && (ME.id === b.awarded_by || canWrite());
-      var linkBtn = 'border:0;background:none;font:inherit;font-size:12px;' +
-        'color:#a49a8e;cursor:pointer;padding:4px 0';
-      var rm = mine
-        ? '<span style="display:flex;gap:12px;flex:none">' +
-          '<button onclick="editBadge(\''+b.id+'\')" style="'+linkBtn+'">Edit</button>' +
-          '<button id="del-'+b.id+'" onclick="armDelete(\'badge\',\''+b.id+'\',event)" ' +
-          'style="'+linkBtn+'">Delete</button></span>'
-        : '<span></span>';
-      return '<div class="card" id="bcard-'+b.id+'"><div class="row"><b>'+(b.emoji?esc(b.emoji)+' ':'&#127941; ')+
-        esc(b.title)+'</b>'+rm+'</div>'+
-        (b.image_key?'<img src="/photo/'+esc(b.image_key)+'" loading="lazy" '+
-          'style="width:100%;max-width:260px;border-radius:12px;margin-top:8px;display:block">':'')+
-        (b.note?'<p style="margin:7px 0 0;font-size:14px;line-height:1.45">'+esc(b.note)+'</p>':'')+
-        '<p class="tiny" style="margin:6px 0 0">from '+esc(b.awarded_by_name||"someone")+
-        (b.date?' &middot; for '+fmtShort(b.date):'')+
-        ' &middot; '+fmtShort(b.created_at.slice(0,10))+'</p></div>';
-    }).join("");
+      return tile("bespoke", b.id,
+        b.image_key
+          ? '<img src="/photo/'+esc(b.image_key)+'" alt="" loading="lazy">'
+          : '<span class="glyph">'+(b.emoji?esc(b.emoji):'&#127941;')+'</span>',
+        b.title, esc(b.awarded_by_name||""));
+    });
 
     el("s-badges").innerHTML =
       '<h1>Badges</h1><p class="sub">'+(d.states||[]).length+' state'+
-      ((d.states||[]).length===1?"":"s")+' &middot; '+(d.parks||[]).length+' park'+
-      ((d.parks||[]).length===1?"":"s")+' &middot; '+d.miles.total.toLocaleString()+' miles</p>' +
+      ((d.states||[]).length===1?"":"s")+' &middot; '+
+      (d.parks||[]).filter(function(p){ return p.first_date; }).length+' of '+
+      (d.parks||[]).length+' parks &middot; '+d.miles.total.toLocaleString()+' miles</p>' +
       '<h2>From the family</h2>' +
-      (bespoke || '<p class="empty">None yet. Anyone can award one &mdash; make one up.</p>') +
+      (bespoke.length ? wall(bespoke)
+        : '<p class="empty">None yet. Anyone can award one &mdash; make one up.</p>') +
       '<button class="ghostbtn" id="bg-open" onclick="el(\'bg-composer\').style.display=\'block\';this.style.display=\'none\'">' +
         'Award a badge</button>' +
       '<div class="card" id="bg-composer" style="margin-top:9px;display:none">' +
@@ -1395,20 +1400,168 @@ function loadBadges(){
           'onclick="el(\'bg-image\').click()">Add a picture</button>' +
           '<span class="tiny" id="bg-image-note" style="max-width:45%;overflow:hidden;text-overflow:ellipsis"></span></div>' +
         '<button class="ghostbtn" onclick="awardBadge()">Award it</button></div>' +
-      '<h2>States</h2><div class="badges">'+states+'</div>' +
-      '<h2>National parks</h2><div class="badges">'+parks+'</div>' +
-      '<h2>The odometer</h2><div class="badges">'+miles+'</div>' +
-      '<h2>The pump</h2><div class="badges">'+tanks+'</div>';
+      '<h2>National parks</h2>' + wall(parks) +
+      '<h2>States</h2>' +
+      (states.length ? wall(states) : '<p class="empty">No states yet &mdash; that changes fast.</p>') +
+      '<h2>The odometer</h2>' + wall(miles) +
+      '<h2>The pump</h2>' + wall(tanks);
   });
 }
 
-var BADGES = {};
+/* The state outline, filled route-green. Pulled out of loadBadges so the wall
+   tile and the detail screen draw the same shape at different sizes. */
+function stateSvg(shape, px){
+  if (!shape || !shape.rings) return '<span class="glyph">&#128506;</span>';
+  var polys = shape.rings.map(function(r){
+    return '<polygon points="'+r.map(function(pt){ return pt[0]+','+pt[1]; }).join(' ')+
+      '" fill="#1f6f5c22" stroke="#1f6f5c" stroke-width="2.5" stroke-linejoin="round"/>';
+  }).join('');
+  return '<svg viewBox="-4 -4 '+(shape.w+8)+' '+(shape.h+8)+'" ' +
+    'style="width:'+px+'px;height:auto">'+polys+'</svg>';
+}
+
+/* Mile markers as interstate-style shields — red crest, blue field, white
+   number. A road trip's odometer deserves highway iconography. */
+function mileShield(n, px){
+  px = px || 70;
+  return '<svg viewBox="0 0 100 100" style="width:'+px+'px;height:'+px+'px">' +
+    '<path d="M50 4 C62 12 80 14 96 12 C99 44 92 76 50 97 C8 76 1 44 4 12 C20 14 38 12 50 4 Z" ' +
+      'fill="#124a8f" stroke="#ffffff" stroke-width="3.5"/>' +
+    '<path d="M50 4 C62 12 80 14 96 12 C96.5 17 96.6 21 96.4 26 L3.6 26 C3.4 21 3.5 17 4 12 C20 14 38 12 50 4 Z" ' +
+      'fill="#b3282d"/>' +
+    '<text x="50" y="21" text-anchor="middle" fill="#fff" font-size="11.5" font-weight="700" ' +
+      'font-family="system-ui,sans-serif" letter-spacing="1">MILES</text>' +
+    '<text x="50" y="65" text-anchor="middle" fill="#fff" font-size="25" font-weight="800" ' +
+      'font-family="system-ui,sans-serif">'+n.toLocaleString()+'</text></svg>';
+}
+var BADGES = {}, BADGEDATA = null;
+
+/* ---- the badge detail screen ------------------------------------------
+   A full screen with a back pill, not a modal: this codebase has twice written
+   down that it does not want modals, the app already swaps screens this way for
+   Place and Reservation, and a badge has real content — a poster, a photograph,
+   a paragraph somebody wrote about their sister. It does not fit in a grid tile
+   and it should not have to.
+
+   The derived four (state, park, miles, tank) fetch their numbers on tap rather
+   than shipping them in /api/badges, which keeps the wall to one light request
+   even as the badge count grows. The family ones need no fetch at all — they
+   arrived whole with the wall. */
+function badgeFacts(rows){
+  return rows.filter(function(r){ return r[1] !== null && r[1] !== undefined && r[1] !== ""; })
+    .map(function(r){ return '<div class="bfact"><span>'+r[0]+'</span><b>'+r[1]+'</b></div>'; })
+    .join("");
+}
+function openBadge(kind, key){
+  show("badge");
+  var back = '<button class="back" onclick="tab(\'badges\')">&larr;</button>';
+
+  if (kind === "bespoke") {
+    var b = BADGES[key];
+    if (!b) { el("s-badge").innerHTML = back + '<h1>Not found</h1>'; return; }
+    var mine = ME && (ME.id === b.awarded_by || canWrite());
+    el("s-badge").innerHTML = back +
+      '<div class="bdart">' + (b.image_key
+        ? '<img src="/photo/'+esc(b.image_key)+'" alt="">'
+        : '<span class="glyph">'+(b.emoji?esc(b.emoji):'&#127941;')+'</span>') + '</div>' +
+      '<h1 id="bd-title">'+(b.emoji&&b.image_key?esc(b.emoji)+' ':'')+esc(b.title)+'</h1>' +
+      '<p class="sub">Awarded by '+esc(b.awarded_by_name||"someone")+
+        (b.date?' &middot; for '+fmtShort(b.date):'')+'</p>' +
+      (b.note?'<p style="margin:0 0 14px;font-size:15px;line-height:1.5">'+esc(b.note)+'</p>':'') +
+      badgeFacts([["Given", fmtShort(b.created_at.slice(0,10))]]) +
+      (mine ? '<div class="row" style="margin-top:16px;gap:10px">' +
+        '<button class="ghostbtn" style="margin:0;flex:1" onclick="editBadge(\''+esc(key)+'\')">Edit</button>' +
+        '<button class="ghostbtn" id="del-'+esc(key)+'" style="margin:0;flex:1" ' +
+          'onclick="armDelete(\'badge\',\''+esc(key)+'\',event)">Delete</button></div>'
+        : '') +
+      '<div id="bd-edit"></div>';
+    return;
+  }
+
+  /* Art and title come from the wall's own data, so the screen paints instantly
+     and the numbers fill in underneath. A spinner over a poster somebody is
+     already looking at would be worse than a short wait for two counts. */
+  var d = BADGEDATA || {}, art = '', title = '', sub = '';
+  if (kind === "state") {
+    var st = (d.states||[]).filter(function(x){ return x.state === key; })[0];
+    art = stateSvg(st && st.shape, 190); title = key;
+  } else if (kind === "park") {
+    var pk = (d.parks||[]).filter(function(x){ return x.id === key; })[0];
+    title = pk ? pk.name : "Park";
+    art = pk && pk.image_key ? '<img src="/photo/'+esc(pk.image_key)+'" alt="">'
+                             : '<span class="glyph">&#127966;</span>';
+  } else if (kind === "miles") {
+    art = mileShield(parseInt(key,10)*1000, 150);
+    title = (parseInt(key,10)*1000).toLocaleString() + " miles";
+  } else if (kind === "tank") {
+    art = '<span class="glyph">&#9981;</span>';
+    title = (parseInt(key,10)*10) + " tanks";
+  }
+  el("s-badge").innerHTML = back + '<div class="bdart">'+art+'</div>' +
+    '<h1>'+esc(title)+'</h1><p class="sub" id="bd-sub">&hellip;</p><div id="bd-facts"></div>';
+
+  get("/api/badge-detail?kind="+encodeURIComponent(kind)+"&key="+encodeURIComponent(key))
+    .then(function(r){
+      var subEl = el("bd-sub"), factEl = el("bd-facts");
+      if (!subEl || !factEl) return;              // they navigated away
+      if (!r || r.error) { subEl.textContent = "Couldn't load the details."; return; }
+      if (kind === "state") {
+        subEl.innerHTML = r.first_date
+          ? "First crossed " + fmtDay(r.first_date) : "Not yet";
+        factEl.innerHTML = badgeFacts([
+          ["Days in this state", r.days || null],
+          ["Photographs here", r.photos || null],
+          ["Stops recorded", r.stops || null]
+        ]) || '<p class="empty">Just passing through, so far.</p>';
+      } else if (kind === "park") {
+        subEl.innerHTML = r.first_date
+          ? "First reached " + fmtDay(r.first_date)
+          : "Still ahead of them";
+        /* "here" claims the photograph was taken at the park; the 25-mile disc
+           around a centroid cannot support that claim for a park 70 miles
+           across, so when the disc is empty we fall back to the claim the data
+           does support — the same day. */
+        factEl.innerHTML = badgeFacts([
+          [r.photos ? "Photographs here" : "Photographs that day",
+           r.photos || r.photos_that_day || null],
+          ["Things to see ticked off",
+           r.activities_total ? r.activities_done + " of " + r.activities_total : null],
+          ["Nights planned", r.planned_nights || null],
+          ["Artwork", r.credit ? esc(r.credit) : null]
+        ]) || '<p class="empty">Nothing recorded here yet.</p>';
+      } else if (kind === "miles") {
+        subEl.innerHTML = r.date
+          ? "Crossed on " + fmtDay(r.date) + " &middot; day " + r.day_number
+          : (r.miles_total.toLocaleString() + " miles so far &mdash; not yet");
+        factEl.innerHTML = badgeFacts([["Miles so far", r.miles_total.toLocaleString()]]);
+      } else if (kind === "tank") {
+        subEl.innerHTML = r.fills >= r.milestone
+          ? "Earned &middot; " + r.fills + " fill-ups"
+          : r.fills + " of " + r.milestone + " fill-ups";
+        /* These four numbers are the reason this screen exists. Lily has been
+           typing gallons and dollars into the pump form since day one and the
+           app has never once shown them back to her. */
+        factEl.innerHTML = badgeFacts([
+          ["Fill-ups", r.fills || null],
+          ["Gallons", r.gallons != null ? r.gallons : null],
+          ["Spent on fuel", r.cost != null ? "$" + r.cost.toFixed(2) : null],
+          ["Average", r.avg_price != null ? "$" + r.avg_price.toFixed(2) + " a gallon" : null],
+          ["Cheapest", r.cheapest ? "$" + r.cheapest.price.toFixed(2) +
+            (r.cheapest.place ? " &middot; " + esc(r.cheapest.place) : "") +
+            " &middot; " + fmtShort(r.cheapest.date) : null],
+          ["Priciest", r.priciest ? "$" + r.priciest.price.toFixed(2) +
+            (r.priciest.place ? " &middot; " + esc(r.priciest.place) : "") +
+            " &middot; " + fmtShort(r.priciest.date) : null]
+        ]) || '<p class="empty">No fill-ups recorded yet.</p>';
+      }
+    });
+}
 
 /* Editing happens IN the card rather than in a modal, so the thing being
    renamed stays visible while you rename it. Same permission as Delete:
    whoever awarded it, or any author. */
 function editBadge(id){
-  var b = BADGES[id], card = el("bcard-"+id);
+  var b = BADGES[id], card = el("bd-edit");
   if (!b || !card) return;
   card.innerHTML =
     '<div class="row" style="gap:8px"><input type="text" id="be-emoji-'+id+'" ' +
@@ -1418,7 +1571,7 @@ function editBadge(id){
       'placeholder="What earned it?">'+esc(b.note||"")+'</textarea>' +
     '<div class="row" style="margin-top:8px;gap:8px">' +
       '<button class="ghostbtn" style="margin:0;flex:1" onclick="saveBadge(\''+id+'\')">Save</button>' +
-      '<button class="ghostbtn" style="margin:0;flex:1" onclick="loadBadges()">Cancel</button></div>';
+      '<button class="ghostbtn" style="margin:0;flex:1" onclick="openBadge(\'bespoke\',\''+id+'\')">Cancel</button></div>';
   var t = el("be-title-"+id); if (t) t.focus();
 }
 
@@ -1433,7 +1586,12 @@ function saveBadge(id){
     note:  (el("be-note-"+id)||{}).value || ""
   }).then(function(r){
     if (!r || !r.ok) { alertInline(t, (r && r.error) || "Couldn't save — try again."); return; }
-    loadBadges();
+    /* Refresh the wall's cache, then re-open the detail so the change is
+       visible where the person is standing rather than two screens back. */
+    get("/api/badges").then(function(d){
+      if (d) { BADGEDATA = d; BADGES = {}; (d.bespoke||[]).forEach(function(x){ BADGES[x.id] = x; }); }
+      openBadge("bespoke", id);
+    });
   });
 }
 
