@@ -56,13 +56,50 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .stat small{color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
   .stat .qual{color:var(--ink-3);font-size:10.5px;letter-spacing:0;text-transform:none;display:block;margin-top:1px}
   .actionbar{position:fixed;left:0;right:0;bottom:calc(var(--nav-h) + var(--safe-bot));padding:12px 18px 14px;
-    background:linear-gradient(to top,var(--paper) 62%,rgba(251,249,246,0));z-index:40;max-width:640px;margin:0 auto}
+    background:linear-gradient(to top,var(--paper) 62%,transparent);z-index:40;max-width:640px;margin:0 auto}
   .bigbtn{display:block;width:100%;border:0;border-radius:16px;background:var(--sun);color:#fff;
     font:inherit;font-size:17.5px;font-weight:660;padding:19px;cursor:pointer;box-shadow:0 5px 16px rgba(200,98,31,.32)}
   .bigbtn:active{transform:translateY(1px)}
   .bigbtn[disabled]{opacity:.5}
   .ghostbtn{display:block;width:100%;border:1px solid var(--line);border-radius:14px;background:var(--card);
     color:var(--ink);font:inherit;font-size:15.5px;font-weight:600;padding:15px;cursor:pointer;margin-top:9px;text-decoration:none;text-align:center}
+  /* Shrikhand, self-hosted from our own origin — no third party in any asset
+     path, same rule as the map tiles. */
+  @font-face{font-family:'Bling';src:url('/font/title.woff2') format('woff2');
+    font-weight:400;font-style:normal;font-display:swap}
+  .dial{position:relative;width:min(92vw,360px);aspect-ratio:1;margin:16px auto 4px}
+  .dialbtn{position:absolute;transform:translate(-50%,-50%);width:25%;aspect-ratio:1;
+    border-radius:50%;border:1px solid var(--line);background:var(--card);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    font:inherit;cursor:pointer;box-shadow:0 3px 10px rgba(80,60,30,.13);
+    transition:transform .13s ease, box-shadow .13s ease}
+  .dialbtn .ic{font-size:26px;line-height:1}
+  .dialbtn .lb{font-size:11px;font-weight:660;color:var(--ink);letter-spacing:-.2px}
+  .dialbtn:active{transform:translate(-50%,-50%) scale(.93)}
+  .dialbtn.lit{box-shadow:0 0 0 3px var(--sun), 0 4px 14px rgba(200,98,31,.34)}
+  .dialcentre{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:40%;aspect-ratio:1;border-radius:50%;overflow:hidden;cursor:pointer;
+    background:var(--tap);box-shadow:0 4px 16px rgba(60,40,20,.24)}
+  .dialcentre img{width:100%;height:100%;object-fit:cover;display:block}
+  .dialscrim{position:absolute;inset:0;
+    background:linear-gradient(to top,rgba(20,12,6,.86) 0%,rgba(20,12,6,.55) 46%,rgba(20,12,6,.12) 100%)}
+  .dialprompt{position:absolute;left:0;right:0;bottom:0;padding:0 11px 13px;
+    color:#fff;font-size:12px;font-weight:660;line-height:1.28;text-align:center;
+    text-shadow:0 1px 3px rgba(0,0,0,.6)}
+  .parkwall{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:11px;margin-bottom:11px}
+  .parkposter{margin:0;background:var(--card);border:1px solid var(--line);border-radius:12px;
+    overflow:hidden;box-shadow:0 2px 8px rgba(80,60,30,.10)}
+  .parkposter img{display:block;width:100%;aspect-ratio:600/797;object-fit:cover;background:var(--tap)}
+  .parkposter.noart img{display:none}
+  .parkposter figcaption{font-size:11.5px;line-height:1.3;padding:7px 9px 8px;color:var(--ink);font-weight:640}
+  .parkposter figcaption span{opacity:.55;font-weight:400}
+  .blingwrap{margin:0 0 12px}
+  .blingtitle{font-family:'Bling',Georgia,serif;font-weight:400;margin:0;
+    font-size:clamp(27px,8.4vw,36px);line-height:1.1;letter-spacing:.2px;
+    background:linear-gradient(96deg,#e8952f 0%,#c8621f 42%,#b0431f 70%,#e8b04a 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    -webkit-text-fill-color:transparent;
+    filter:drop-shadow(0 1px 0 rgba(255,255,255,.85)) drop-shadow(0 2px 3px rgba(80,40,10,.22))}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .kind{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:17px 12px;
     text-align:center;cursor:pointer;min-height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px}
@@ -93,7 +130,7 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .badges{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
   .badge{background:var(--road-soft);color:var(--road);border-radius:99px;padding:7px 12px;font-size:12.5px;font-weight:600}
   .navbar{position:fixed;left:0;right:0;bottom:0;height:calc(var(--nav-h) + var(--safe-bot));
-    background:rgba(251,249,246,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line);
+    background:color-mix(in srgb, var(--paper) 96%, transparent);backdrop-filter:blur(12px);border-top:1px solid var(--line);
     display:flex;z-index:45;padding-bottom:var(--safe-bot);max-width:640px;margin:0 auto}
   .navbar button{flex:1;min-width:0;border:0;background:none;font:inherit;font-size:10.5px;
     letter-spacing:-.1px;color:var(--ink-3);display:flex;flex-direction:column;align-items:center;
@@ -178,6 +215,78 @@ function fmtDay(ds){ if(!ds) return ""; var d=new Date(ds+"T12:00:00");
   return d.toLocaleDateString([], {weekday:"long", month:"long", day:"numeric"}); }
 function fmtShort(ds){ if(!ds) return ""; var d=new Date(ds+"T12:00:00");
   return d.toLocaleDateString([], {month:"short", day:"numeric"}); }
+/* Andy's words, lightly corrected. "Click" became "tap" — this app has only
+   ever been opened on a phone. */
+var PROMPT = {
+  gas:      "Got gas? Tap me!",
+  food:     "Eat something? Tell us about it!",
+  campsite: "Where are you sleeping? Is it cool?",
+  lodging:  "Couch surfing? Motel? Tell us!",
+  event:    "Where&rsquo;d you go? Worth remembering?",
+  journal:  "Write about it!"
+};
+var HERO = [], HERO_I = 0, DIAL_I = 0, DIAL_T = null;
+var DIAL_KINDS = ["gas","food","campsite","lodging","event","journal"];
+
+function paintHero(){
+  var img = el("dialphoto"); if (!img || !HERO.length) return;
+  var h = HERO[Math.abs(HERO_I) % HERO.length];
+  if (h && img.getAttribute("data-k") !== h.thumb) {
+    img.setAttribute("data-k", h.thumb);
+    img.src = "/photo/" + h.thumb;
+  }
+}
+function openHero(){
+  if (!HERO.length) { tab("photos"); return; }
+  var h = HERO[Math.abs(HERO_I) % HERO.length];
+  if (h) openPhoto(h.id, h.key || h.thumb, "today");
+}
+function showPrompt(){
+  var p = el("dialprompt"); if (!p) return;
+  var k = DIAL_KINDS[Math.abs(DIAL_I) % DIAL_KINDS.length];
+  p.innerHTML = PROMPT[k] || "";
+  DIAL_KINDS.forEach(function(x){
+    var b = el("dial-"+x); if (b) b.className = "dialbtn" + (x === k ? " lit" : "");
+  });
+}
+function promptFor(k){
+  var i = DIAL_KINDS.indexOf(k);
+  if (i >= 0) { DIAL_I = i; showPrompt(); startDial(); }
+}
+/* Restarted rather than stacked: promptFor() fires on touch, and two timers
+   would race each other for the highlight. */
+function startDial(){
+  if (DIAL_T) clearInterval(DIAL_T);
+  DIAL_T = setInterval(function(){
+    if (document.hidden || !el("dialprompt")) return;
+    DIAL_I++; showPrompt();
+  }, 4200);
+}
+
+/* The app changes its look on every vehicle stop. Andy's reasoning: they should
+   notice something is different at the moment they get out of the car, because
+   that is when there is something worth recording. Pinks, reds and purples per
+   his ask; no greens, because the route line is green and the map needs to keep
+   winning. Every one of these was checked against the ink and control colours —
+   the worst case sits within 7% of the old warm white. */
+var PALETTE = ["#fdeef2","#fdecec","#fdf0e8","#faecf7","#f4ecfb","#eeeefb","#fdf6e3","#eaf3fb"];
+var CYCLE = 0;
+function applyCycle(n){
+  CYCLE = n || 0;
+  var c = PALETTE[Math.abs(CYCLE) % PALETTE.length];
+  document.documentElement.style.setProperty("--paper", c);
+  var m = document.querySelector('meta[name="theme-color"]');
+  if (m) m.setAttribute("content", c);
+}
+/* Whose name comes first also alternates — deterministically, from the same
+   counter. Random per render would flip the title mid-glance, because Today
+   re-pulls itself every 90 seconds. */
+function tripTitle(){
+  return (Math.abs(CYCLE) % 2 === 0)
+    ? "Lily &amp; Ada&rsquo;s<br>Roadtrip Adventure"
+    : "Ada &amp; Lily&rsquo;s<br>Roadtrip Adventure";
+}
+
 var ICON = {gas:"⛽",food:"🍔",campsite:"⛺",lodging:"🛏",
   event:"🎫",observation:"👀"};
 
@@ -384,18 +493,44 @@ function loadToday(){
           'onclick="armUndoStop()">Undo</button></div></div>';
     } else if (LAST_REC) LAST_REC = null;
 
+    /* The dial. The 2x3 grid was six identical slabs and in four days exactly
+       one of them was ever pressed. Six buttons on a ring around a picture from
+       the trip reads as something to play with rather than a form to fill in,
+       and the centre carries the invitation: the prompts cycle through all six
+       so every button explains itself without anyone tapping first, and the
+       matching button lights up so the sentence and its target are visibly
+       connected. Touching a button switches the centre to that button's line.
+       The photo behind it changes hourly and again at every vehicle stop. */
     var grid = (ME && ME.role==="author")
-      ? '<div class="grid" style="margin-top:14px">' + kinds.map(function(k){
-          var act = k === "journal" ? "openJot()" : "saveStop(\'"+k+"\')";
-          var ic = k === "journal" ? "&#9997;" : ICON[k];
-          return '<div class="kind" onclick="'+act+'"><span class="ic">'+ic+
-                 '</span><span class="lb">'+KLABEL[k]+'</span></div>';
-        }).join("") + '</div>'
+      ? '<div class="dial" id="dial">' +
+          '<div class="dialcentre" id="dialcentre" onclick="openHero()">' +
+            '<img id="dialphoto" alt="">' +
+            '<div class="dialscrim"></div>' +
+            '<div class="dialprompt" id="dialprompt"></div>' +
+          '</div>' +
+          kinds.map(function(k,i){
+            var act = k === "journal" ? "openJot()" : "saveStop(\'"+k+"\')";
+            var ic = k === "journal" ? "&#9997;" : ICON[k];
+            var a = (-90 + i*60) * Math.PI/180, R = 35.5;
+            var x = (50 + R*Math.cos(a)).toFixed(2), y = (50 + R*Math.sin(a)).toFixed(2);
+            return '<button class="dialbtn" id="dial-'+k+'" style="left:'+x+'%;top:'+y+'%" ' +
+              'onclick="'+act+'" ontouchstart="promptFor(\''+k+'\')" ' +
+              'onmouseenter="promptFor(\''+k+'\')">' +
+              '<span class="ic">'+ic+'</span><span class="lb">'+KLABEL[k]+'</span></button>';
+          }).join("") +
+        '</div>'
       : '';
+    applyCycle(d.cycle);
+    HERO = d.hero || [];
+    // Hourly, and again at every stop — so the picture is different when they
+    // get out of the car even if an hour has not passed.
+    HERO_I = Math.floor(Date.now() / 3600000) + (d.cycle || 0);
     el("s-today").innerHTML =
+      '<div class="blingwrap"><h1 class="blingtitle">'+tripTitle()+'</h1></div>' +
       '<h1 style="font-size:19px;line-height:1.35">'+l1+'</h1>' +
       '<p class="sub">'+l2+'</p>' +
       undo + grid + tonight + last;
+    if (el("dial")) { paintHero(); DIAL_I = 0; showPrompt(); startDial(); }
   });
 }
 
@@ -816,10 +951,22 @@ function loadBadges(){
         '<div class="tiny" style="opacity:.65">'+fmtShort(st.first_date)+'</div></div>';
     }).join("") || '<p class="empty">No states yet — that changes fast.</p>';
 
-    var parks = (d.parks||[]).map(function(p){
+    /* A park with artwork shows the poster; one without keeps the text chip,
+       so the wall fills in as Andy finds them rather than waiting on all 13.
+       onerror falls back too, in case a row outlives its R2 object. */
+    var parkArt = (d.parks||[]).filter(function(p){ return p.image_key; }).map(function(p){
+      return '<figure class="parkposter">' +
+        '<img src="/photo/'+esc(p.image_key)+'" alt="'+esc(p.name)+'" loading="lazy" ' +
+          'onerror="this.closest(\'figure\').className=\'parkposter noart\'">' +
+        '<figcaption>'+esc(p.name)+'<span> &middot; '+fmtShort(p.first_date)+'</span></figcaption>' +
+        '</figure>';
+    }).join("");
+    var parkChips = (d.parks||[]).filter(function(p){ return !p.image_key; }).map(function(p){
       return '<span class="badge">&#127966; '+esc(p.name)+'<span style="opacity:.6;font-weight:400"> &middot; '+
         fmtShort(p.first_date)+'</span></span>';
-    }).join("") || '<p class="empty">Parks appear when the car stops inside one.</p>';
+    }).join("");
+    var parks = (parkArt ? '<div class="parkwall">'+parkArt+'</div>' : '') + parkChips
+      || '<p class="empty">Parks appear when the car stops inside one.</p>';
 
     // Mile markers as interstate-style shields — red crest, blue field,
     // white number. A road trip's odometer deserves highway iconography.
@@ -1243,7 +1390,7 @@ function loadPlace(id, from){
       (i.planned_arrival?'Hoped for '+fmtShort(i.planned_arrival):'No date') +
       (i.planned_nights?' &middot; '+i.planned_nights+' nights':'') +
       (i.drive_time_from_prev?' &middot; '+esc(i.drive_time_from_prev)+' away':'') + '</p>' +
-      (d.activities.length ? '<h2>'+d.activities.length+' things she wanted to see</h2>' +
+      (d.activities.length ? '<h2>'+d.activities.length+' things to see</h2>' +
         '<div class="card" style="padding:4px 14px"><ul class="check">'+acts+'</ul></div>' : '') +
       /* Her research, exactly as she typed it into the vault — newlines and
          tab indentation intact via pre-wrap, because the shape of the list IS
@@ -1486,10 +1633,48 @@ function basemapOverlays(map, d){
     }
   });
   map.addSource("photopins", { type:"geojson", data: feats(photoRows, function(p){
-    return { id:p.id, thumb:p.thumb_key||"", date:p.date||"" }; }) });
+    return { id:p.id, thumb:p.thumb_key||"", date:p.date||"", icon:"ph-"+p.id }; }) });
   var pinSize = ["interpolate", ["linear"], ["zoom"], 4, 0.7, 8, 1.1, 12, 1.5, 15, 1.9];
   map.addLayer({ id:"photo-pins", type:"symbol", source:"photopins",
-    layout:{ "icon-image":"pin-photo", "icon-size":pinSize, "icon-allow-overlap":true } });
+    layout:{ // the real photo once it has loaded; the camera glyph until then
+             "icon-image":["coalesce",["image",["get","icon"]],["image","pin-photo"]],
+             "icon-size":pinSize, "icon-allow-overlap":true } });
+
+  /* Real thumbnails instead of a camera glyph. /photo/* already serves
+     'private, max-age=31536000, immutable', so each one is fetched once and
+     then lives in the phone's cache — the second look at the map costs
+     nothing. Drawn into a rounded tile with a white border so a dark photo
+     still reads as a pin against the map. */
+  (function loadPhotoPins(){
+    var SZ = 84, R = 15, pending = 0;
+    photoRows.forEach(function(p){
+      if (!p.thumb_key || map.hasImage("ph-"+p.id)) return;
+      pending++;
+      var img = new Image();
+      img.onload = function(){
+        var c = document.createElement("canvas"); c.width = c.height = SZ;
+        var x = c.getContext("2d");
+        x.beginPath();
+        if (x.roundRect) x.roundRect(2, 2, SZ-4, SZ-4, R); else x.rect(2, 2, SZ-4, SZ-4);
+        x.fillStyle = "#fff"; x.fill();
+        x.save(); x.clip();
+        // cover-crop: fill the tile, never letterbox
+        var s = Math.max((SZ-8) / img.width, (SZ-8) / img.height);
+        var w = img.width * s, h = img.height * s;
+        x.drawImage(img, 4 + (SZ-8-w)/2, 4 + (SZ-8-h)/2, w, h);
+        x.restore();
+        x.beginPath();
+        if (x.roundRect) x.roundRect(2, 2, SZ-4, SZ-4, R); else x.rect(2, 2, SZ-4, SZ-4);
+        x.strokeStyle = "#fff"; x.lineWidth = 4; x.stroke();
+        x.strokeStyle = "rgba(0,0,0,.20)"; x.lineWidth = 1.5; x.stroke();
+        try { if (!map.hasImage("ph-"+p.id))
+                map.addImage("ph-"+p.id, x.getImageData(0,0,SZ,SZ), { pixelRatio: 2 }); } catch(e){}
+        if (--pending === 0) map.triggerRepaint();
+      };
+      img.onerror = function(){ if (--pending === 0) map.triggerRepaint(); };
+      img.src = "/photo/" + p.thumb_key;
+    });
+  })();
 
   map.addSource("journalpins", { type:"geojson", data: feats(d.journal||[], function(j){
     return { id:j.id, date:j.date||"", excerpt:j.excerpt||"", author:j.author||"" }; }) });
