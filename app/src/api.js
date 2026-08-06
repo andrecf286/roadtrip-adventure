@@ -217,9 +217,11 @@ export async function today(env) {
   // beyond breadcrumb tolerance; they are still in Photos, and if the strays
   // get deleted this filter can be dropped.
   const heroShots = await env.roadtrip.prepare(
-    `SELECT id, thumb_key, r2_key, date FROM photo
-      WHERE lat IS NOT NULL
-      ORDER BY taken_at DESC LIMIT 40`).all();
+    `SELECT p.id, p.thumb_key, p.r2_key, p.date, p.taken_at,
+            COALESCE(pe.name, '') AS author
+       FROM photo p LEFT JOIN person pe ON pe.id = p.author_id
+      WHERE p.lat IS NOT NULL
+      ORDER BY p.taken_at DESC LIMIT 40`).all();
 
   return json({
     date,
@@ -247,7 +249,10 @@ export async function today(env) {
     cycle: stopCount,
     // A dozen photos for the Today centrepiece to rotate through. Sent with
     // Today so the screen costs one request, not two.
-    hero: heroShots.results.map((h) => ({ id: h.id, thumb: h.thumb_key || h.r2_key, key: h.r2_key, date: h.date })),
+    // author and taken_at ride along so the parents' version of the Today
+    // screen can caption the picture with who took it and when.
+    hero: heroShots.results.map((h) => ({ id: h.id, thumb: h.thumb_key || h.r2_key,
+      key: h.r2_key, date: h.date, taken_at: h.taken_at, author: h.author })),
   });
 }
 

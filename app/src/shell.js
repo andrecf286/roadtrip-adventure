@@ -96,6 +96,8 @@ export const SHELL = String.raw`<!DOCTYPE html>
     width:98%;aspect-ratio:1;border-radius:50%;overflow:hidden;cursor:pointer;
     background:var(--tap);box-shadow:0 5px 20px rgba(60,40,20,.26)}
   .dialcentre img{width:100%;height:100%;object-fit:cover;display:block}
+  .dial.solo{margin:16px auto 2px}
+  .herocap{margin:0 0 14px;text-align:center;font-size:12.5px;color:var(--ink-2)}
   /* Darkest where the words are, clearing toward the rim so the picture still
      reads as a picture. */
   .dialscrim{position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,
@@ -293,6 +295,11 @@ function paintHero(){
   if (h && img.getAttribute("data-k") !== h.thumb) {
     img.setAttribute("data-k", h.thumb);
     img.src = "/photo/" + h.thumb;
+  }
+  var cap = el("herocap");
+  if (cap && h) {
+    cap.innerHTML = (h.author ? esc(h.author) + ' &middot; ' : '') + fmtDay(h.date) +
+      '<span style="opacity:.6"> &middot; tap for another</span>';
   }
 }
 /* Tapping the picture deals another one. It used to open the photo full size;
@@ -619,7 +626,19 @@ function loadToday(){
               '<span class="ic">'+ic+'</span><span class="lb">'+KLABEL[k]+'</span></button>';
           }).join("") +
         '</div>'
-      : '';
+      /* The parents get the picture without the controls. The dial was
+         author-only from the start — the six buttons write stops and a viewer's
+         write is refused server-side — so Jana, Amelia and David were looking at
+         a mostly empty Today screen. They are the ones sitting at home wanting
+         to see the trip, so they arguably want the photograph MOST. No scrim
+         and no prompt here: nothing has to be legible over it, so the picture
+         gets to be a picture. Tapping deals another one, same as for the girls. */
+      : '<div class="dial solo" id="dial">' +
+          '<div class="dialcentre" id="dialcentre" onclick="openHero()">' +
+            '<img id="dialphoto" alt="">' +
+          '</div>' +
+        '</div>' +
+        '<p class="herocap" id="herocap"></p>';
     applyCycle(d.cycle);
     HERO = d.hero || [];
     // Hourly, and again at every stop — so the picture is different when they
@@ -630,7 +649,11 @@ function loadToday(){
       '<h1 style="font-size:19px;line-height:1.35">'+l1+'</h1>' +
       '<p class="sub">'+l2+'</p>' +
       undo + grid + tonight + last;
-    if (el("dial")) { paintHero(); DIAL_I = 0; showPrompt(); startDial(); }
+    if (el("dial")) {
+      paintHero();
+      // Only the girls' version has prompts to cycle.
+      if (el("dialprompt")) { DIAL_I = 0; showPrompt(); startDial(); }
+    }
   });
 }
 
