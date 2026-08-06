@@ -850,16 +850,21 @@ function loadBadges(){
     tanks += '<span class="badge" style="opacity:.55">'+d.tanks.fills+' fill'+
       (d.tanks.fills===1?"":"s")+' so far</span>';
 
+    BADGES = {};
     var bespoke = (d.bespoke||[]).map(function(b){
+      BADGES[b.id] = b;
       // The awarder can always remove their own (delBtn is authors-only, and
       // a viewer must be able to undo a mistaken award).
       var mine = ME && (ME.id === b.awarded_by || ME.role === "author");
+      var linkBtn = 'border:0;background:none;font:inherit;font-size:12px;' +
+        'color:#a49a8e;cursor:pointer;padding:4px 0';
       var rm = mine
-        ? '<button id="del-'+b.id+'" onclick="armDelete(\'badge\',\''+b.id+'\',event)" ' +
-          'style="border:0;background:none;font:inherit;font-size:12px;' +
-          'color:#a49a8e;cursor:pointer;padding:4px 0">Delete</button>'
+        ? '<span style="display:flex;gap:12px;flex:none">' +
+          '<button onclick="editBadge(\''+b.id+'\')" style="'+linkBtn+'">Edit</button>' +
+          '<button id="del-'+b.id+'" onclick="armDelete(\'badge\',\''+b.id+'\',event)" ' +
+          'style="'+linkBtn+'">Delete</button></span>'
         : '<span></span>';
-      return '<div class="card"><div class="row"><b>'+(b.emoji?esc(b.emoji)+' ':'&#127941; ')+
+      return '<div class="card" id="bcard-'+b.id+'"><div class="row"><b>'+(b.emoji?esc(b.emoji)+' ':'&#127941; ')+
         esc(b.title)+'</b>'+rm+'</div>'+
         (b.image_key?'<img src="/photo/'+esc(b.image_key)+'" loading="lazy" '+
           'style="width:100%;max-width:260px;border-radius:12px;margin-top:8px;display:block">':'')+
@@ -893,6 +898,41 @@ function loadBadges(){
       '<h2>National parks</h2><div class="badges">'+parks+'</div>' +
       '<h2>The odometer</h2><div class="badges">'+miles+'</div>' +
       '<h2>The pump</h2><div class="badges">'+tanks+'</div>';
+  });
+}
+
+var BADGES = {};
+
+/* Editing happens IN the card rather than in a modal, so the thing being
+   renamed stays visible while you rename it. Same permission as Delete:
+   whoever awarded it, or any author. */
+function editBadge(id){
+  var b = BADGES[id], card = el("bcard-"+id);
+  if (!b || !card) return;
+  card.innerHTML =
+    '<div class="row" style="gap:8px"><input type="text" id="be-emoji-'+id+'" ' +
+      'style="width:64px;flex:none;text-align:center" value="'+esc(b.emoji||"")+'" placeholder="&#127941;">' +
+    '<input type="text" id="be-title-'+id+'" value="'+esc(b.title||"")+'"></div>' +
+    '<textarea id="be-note-'+id+'" style="min-height:64px;margin-top:8px" ' +
+      'placeholder="What earned it?">'+esc(b.note||"")+'</textarea>' +
+    '<div class="row" style="margin-top:8px;gap:8px">' +
+      '<button class="ghostbtn" style="margin:0;flex:1" onclick="saveBadge(\''+id+'\')">Save</button>' +
+      '<button class="ghostbtn" style="margin:0;flex:1" onclick="loadBadges()">Cancel</button></div>';
+  var t = el("be-title-"+id); if (t) t.focus();
+}
+
+function saveBadge(id){
+  var t = el("be-title-"+id); if (!t) return;
+  // Same lesson as the award composer: a tap that does nothing reads as broken.
+  if (!t.value.trim()) { alertInline(t, "Give the badge a name first."); t.focus(); return; }
+  send("/api/badge", "PATCH", {
+    id: id,
+    title: t.value,
+    emoji: (el("be-emoji-"+id)||{}).value || "",
+    note:  (el("be-note-"+id)||{}).value || ""
+  }).then(function(r){
+    if (!r || !r.ok) { alertInline(t, (r && r.error) || "Couldn't save — try again."); return; }
+    loadBadges();
   });
 }
 

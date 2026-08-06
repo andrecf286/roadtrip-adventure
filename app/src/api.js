@@ -948,6 +948,29 @@ export async function uploadBadge(env, person, request) {
 }
 
 /** Remove a badge: its awarder, or any author (the girls can prune). */
+/** Edit a badge's title, emoji or note. Same permission as removing one:
+    whoever awarded it, or any author. The family invented this whole surface
+    over iMessage and they name things badly the first time — Amelia asked for
+    this after "No Stabbies - Level 1" went up with a typo. The image is NOT
+    touched here; re-award if the picture is wrong. */
+export async function updateBadge(env, person, body) {
+  if (!person) return json({ error: "unauthorized" }, 401);
+  if (!body.id) return json({ error: "id required" }, 400);
+  if (!body.title || !body.title.trim()) return json({ error: "title required" }, 400);
+  const row = await env.roadtrip
+    .prepare(`SELECT awarded_by FROM badge WHERE id = ?`).bind(body.id).first();
+  if (!row) return json({ error: "not found" }, 404);
+  if (person.id !== row.awarded_by && person.role !== "author")
+    return json({ error: "not yours to edit" }, 403);
+  await env.roadtrip.prepare(
+    `UPDATE badge SET title = ?, emoji = ?, note = ? WHERE id = ?`
+  ).bind(body.title.trim().slice(0, 80),
+         (body.emoji || "").trim().slice(0, 8) || null,
+         (body.note || "").trim().slice(0, 500) || null,
+         body.id).run();
+  return json({ ok: true, id: body.id });
+}
+
 export async function deleteBadge(env, person, body) {
   if (!person) return json({ error: "unauthorized" }, 401);
   if (!body.id) return json({ error: "id required" }, 400);

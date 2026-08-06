@@ -142,9 +142,9 @@ export default {
           if (request.method === "DELETE") return api.deletePhoto(env, person, body);
           return json({ error: "use /api/photo/upload" }, 400);
         case "/api/badge":
-          return request.method === "DELETE"
-            ? api.deleteBadge(env, person, body)
-            : api.createBadge(env, person, body);
+          if (request.method === "DELETE") return api.deleteBadge(env, person, body);
+          if (request.method === "PATCH")  return api.updateBadge(env, person, body);
+          return api.createBadge(env, person, body);
         default:                 return json({ error: "not found" }, 404);
       }
     }
