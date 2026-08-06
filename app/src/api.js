@@ -209,8 +209,16 @@ export async function today(env) {
   // Recent-weighted rather than uniform: a picture from this morning pulls
   // harder than one from day one. Newest 40, twelve of them, rotated hourly
   // by the client.
+  // Located photos only. A photo has a location because its EXIF carried GPS,
+  // or because the car's breadcrumbs put it somewhere at its capture instant —
+  // either way it was taken ON THE TRIP. A screenshot has neither, which is how
+  // a picture of Andy's iOS photo picker ended up as the centrepiece of the
+  // Today screen. Costs three of Lily's day-1 camp shots, which were parked
+  // beyond breadcrumb tolerance; they are still in Photos, and if the strays
+  // get deleted this filter can be dropped.
   const heroShots = await env.roadtrip.prepare(
     `SELECT id, thumb_key, r2_key, date FROM photo
+      WHERE lat IS NOT NULL
       ORDER BY taken_at DESC LIMIT 40`).all();
 
   return json({
