@@ -148,6 +148,14 @@ export const SHELL = String.raw`<!DOCTYPE html>
      with contained art rather than cover: a 600x797 park poster and a wide
      state outline both have to sit in the same box without being cropped into
      nonsense. */
+  /* The seam. A labelled line across the timeline where the past stops and the
+     plan starts, so "now" is a place on the page rather than something you have
+     to work out from the dates. */
+  .seam{display:flex;align-items:center;gap:10px;margin:16px 0 10px;
+    color:var(--sun);font-size:12px;font-weight:700;letter-spacing:.4px;
+    text-transform:uppercase}
+  .seam:before,.seam:after{content:"";flex:1;height:2px;border-radius:2px;
+    background:linear-gradient(90deg,transparent,var(--sun),transparent)}
   .bwall{display:grid;grid-template-columns:repeat(auto-fill,minmax(98px,1fr));
     gap:10px;margin:0 0 4px}
   .btile{background:var(--card);border:1px solid var(--line);border-radius:14px;
@@ -290,7 +298,6 @@ export const SHELL = String.raw`<!DOCTYPE html>
   <section class="screen on" id="s-today"></section>
   <section class="screen" id="s-trip"></section>
   <section class="screen" id="s-map"></section>
-  <section class="screen" id="s-places"></section>
   <section class="screen" id="s-day"></section>
   <section class="screen" id="s-place"></section>
   <section class="screen" id="s-res"></section>
@@ -309,7 +316,6 @@ export const SHELL = String.raw`<!DOCTYPE html>
     <button data-tab="map"><span class="ic">&#128506;</span>Map</button>
     <button data-tab="memories"><span class="ic">&#128247;&#9997;</span>Memories</button>
     <button data-tab="badges"><span class="ic">&#127941;</span>Badges</button>
-    <button data-tab="places"><span class="ic">&#128204;</span>Plan</button>
   </nav>
 
 <script>
@@ -724,7 +730,10 @@ function tab(name){
   if(name==="map") loadMapScreen();
   if(name==="memories") loadMemories();
   if(name==="badges") loadBadges();
-  if(name==="places") loadPlaces();
+  /* "places" no longer has a tab — Plan merged into Trip 2026-08-06. Kept as a
+     route so PLACE_FROM values stored by an older shell still land somewhere
+     real instead of on a blank screen. */
+  if(name==="places") loadTrip();
   // "map" is no longer a tab — it lives at the head of Trip and opens full
   // size from there via loadMapScreen().
 }
@@ -1143,6 +1152,19 @@ function loadTrip(){
   show("trip");
   get("/api/trip").then(function(d){
     if (!d) { offlineInto("s-trip", "loadTrip()"); return; }
+
+    /* Trip and Plan were two tabs over ONE table. Plan listed every intention;
+       Trip listed the next eight of those same rows under a different heading;
+       both opened the same detail screen; and the tab said "Plan" while the
+       heading said "Itinerary". The merge is one continuous timeline with NOW
+       as the seam — behind above, ahead below — because that is what a road
+       trip actually is, and because it puts the two things worth deciding
+       between (what just happened, what is next) either side of where the
+       screen opens.
+
+       Days ascend rather than descend now. Reverse-chronological was right for
+       a screen that only showed the past; on a timeline it would mean walking
+       backwards into the future. */
     var past = d.days.map(function(x){
       // The row tells the day's story: the stops themselves, in order, with
       // their icons — not a count. Amelia's ask, verbatim: "what they did on
@@ -1154,7 +1176,7 @@ function loadTrip(){
       });
       if (sl.length > 4) bits.push("+" + (sl.length - 4) + " more");
       if (x.photos) bits.push(x.photos + " photo" + (x.photos===1?"":"s"));
-      return '<div class="day" onclick="loadDay(\''+x.date+'\')">' +
+      return '<div class="day" onclick="loadDay(\'' + x.date + '\')">' +
         '<div class="daynum"><b>'+x.day_number+'</b><small>'+fmtShort(x.date)+'</small></div>' +
         '<div style="flex:1"><div class="row"><b>'+esc(x.title||(x.places?x.places:"On the road"))+
         '</b><span class="tiny">'+(x.miles!=null?x.miles+" mi":"")+'</span></div>' +
@@ -1162,26 +1184,63 @@ function loadTrip(){
         '</div></div>';
     }).join("") || '<p class="empty">No days yet.</p>';
 
-    var ahead = d.ahead.map(function(i){
-      return '<div class="day" style="opacity:.62" onclick="loadPlace(\''+i.id+'\',\'trip\')">' +
-        '<div class="daynum"><b>&middot;</b><small>'+(i.planned_arrival?fmtShort(i.planned_arrival):"&mdash;")+'</small></div>' +
-        '<div style="flex:1"><div class="row"><b>'+esc(i.name)+'</b><span class="tiny">'+
-        esc(i.drive_time_from_prev||"")+'</span></div><p class="tiny" style="margin:3px 0 0">'+
-        i.activities+' to see'+(i.booked?' &middot; booked':'')+'</p></div></div>';
-    }).join("");
+    var all = d.places || [];
+    /* Three bands, one rule each. Dated-and-unreached is the road ahead;
+       undated-and-unreached is Someday, which is honest about an itinerary the
+       README calls aspirational rather than pretending every hope has a date;
+       dropped is Skipped, kept rather than deleted because Andy would rather
+       see the whole thread than a tidy one. Already-reached places are not a
+       band at all — they are in the day rows above, which is where they
+       actually happened. */
+    var ahead   = all.filter(function(p){ return !p.visited && !p.dropped && p.planned_arrival; });
+    var someday = all.filter(function(p){ return !p.visited && !p.dropped && !p.planned_arrival; });
+    var skipped = all.filter(function(p){ return p.dropped; });
 
-    el("s-trip").innerHTML = '<h1>The Trip</h1><p class="sub">'+d.days.length+
-      ' day'+(d.days.length===1?"":"s")+' so far</p>' +
+    function placeRow(p, faded){
+      return '<div class="day"' + (faded ? ' style="opacity:.55"' : '') +
+        ' onclick="loadPlace(\'' + p.id + '\',\'trip\')">' +
+        '<div class="daynum"><b>&middot;</b><small>' +
+          (p.planned_arrival ? fmtShort(p.planned_arrival) : '&mdash;') + '</small></div>' +
+        '<div style="flex:1"><div class="row"><b>'+esc(p.name)+'</b>' +
+          '<span class="tiny">'+esc(p.drive_time_from_prev||"")+'</span></div>' +
+        '<p class="tiny" style="margin:3px 0 0">'+esc(p.kind||"") +
+          (p.activities ? ' &middot; '+p.did+'/'+p.activities+' to see' : '') +
+          (p.planned_nights ? ' &middot; '+p.planned_nights+' night'+(p.planned_nights===1?'':'s') : '') +
+          (p.booked ? ' &middot; booked' : '') + '</p></div></div>';
+    }
+
+    var reached = all.filter(function(p){ return p.visited; }).length;
+    el("s-trip").innerHTML =
+      '<h1>The Trip</h1><p class="sub">'+d.days.length+' day'+(d.days.length===1?"":"s")+
+        ' &middot; '+reached+' of '+all.filter(function(p){ return !p.dropped; }).length+
+        ' places reached</p>' +
       '<div class="maparea" id="trip-map" style="height:210px;margin-bottom:6px"></div>' +
       '<p class="tiny" style="margin:0 0 4px">Tap the map to open it full size.</p>' +
-      past + (ahead ? '<h2>Coming up</h2>'+ahead : '');
+      past +
+      '<div class="seam" id="now"><span>' + fmtDay(d.today) + '</span></div>' +
+      (ahead.length ? ahead.map(function(p){ return placeRow(p, true); }).join("")
+        : '<p class="empty">Nothing dated ahead.</p>') +
+      (someday.length ? '<h2>Someday</h2>' +
+        '<p class="tiny" style="margin:-6px 0 8px">No date on these &mdash; they happen if they happen.</p>' +
+        someday.map(function(p){ return placeRow(p, true); }).join("") : '') +
+      (skipped.length ? '<h2>Skipped</h2>' +
+        skipped.map(function(p){ return placeRow(p, true); }).join("") : '');
+
     // tab(), not show(): show() swaps screens without moving the nav highlight,
     // the same stale-highlight defect QA already found on deletes.
     drawMap("trip-map", 210, function(){ tab("map"); });
+
+    /* Open at the seam. By week five there are thirty-odd day rows above it and
+       landing on day one would mean scrolling past the whole trip to find out
+       what is next. Guarded because the seam is near the top for the first few
+       days, where scrolling would just be a jolt. */
+    var seam = el("now");
+    if (seam && seam.getBoundingClientRect().top > window.innerHeight * 0.75) {
+      seam.scrollIntoView({ block: "center" });
+    }
   });
 }
 
-var LAST_DAY = null, LAST_PLACE = null;
 function loadDay(date){
   show("day");
   LAST_DAY = date;
@@ -1855,24 +1914,7 @@ function uploadPhotos(files){
   })();
 }
 
-function loadPlaces(){
-  show("places");
-  get("/api/places").then(function(d){
-    if (!d) { offlineInto("s-places", "loadPlaces()"); return; }
-    var visited = d.places.filter(function(p){ return p.visited; }).length;
-    el("s-places").innerHTML = '<h1>Itinerary</h1><p class="sub">'+d.places.length+
-      ' place'+(d.places.length===1?'':'s')+' &middot; '+visited+' reached so far</p>' +
-      d.places.map(function(p){
-      return '<div class="day" onclick="loadPlace(\''+p.id+'\',\'places\')">' +
-        '<div style="flex:1"><div class="row"><b'+(p.visited?'':' style="opacity:.62"')+'>'+esc(p.name)+
-        '</b><span class="tiny">'+(p.wanted?p.did+"/"+p.wanted:"")+'</span></div>' +
-        '<p class="tiny" style="margin:3px 0 0">'+esc(p.kind||"")+
-        (p.planned_arrival?' &middot; '+fmtShort(p.planned_arrival):'')+'</p></div></div>';
-    }).join("");
-  });
-}
-
-var PLACE_FROM = "places";
+var PLACE_FROM = "trip";
 function loadPlace(id, from){
   show("place");
   LAST_PLACE = id;

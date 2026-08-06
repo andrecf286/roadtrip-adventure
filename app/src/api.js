@@ -323,7 +323,7 @@ export async function trip(env) {
     `SELECT date, day_number, title, miles, stops, photos, journal_entries, places
        FROM v_day_summary
       WHERE date >= ? AND date <= ?
-      ORDER BY date DESC`).bind(meta.departure_date, today_).all();
+      ORDER BY date ASC`).bind(meta.departure_date, today_).all();
 
   // What actually happened each day, not just how much of it: the stops
   // themselves, in order, so a Trip row can read "gas · Culver's · Schroeder
@@ -353,21 +353,37 @@ export async function trip(env) {
     d.places = v ? [...v].map((id) => nameOf[id]).filter(Boolean).join(", ") : null;
   }
 
-  // Faded, undated, ordered by Lily's original sequence. These are hopes.
-  // Nothing here is ever marked late, missed, or overdue.
-  const aheadAll = await env.roadtrip.prepare(
-    `SELECT i.id, i.name, i.kind, i.planned_arrival, i.planned_nights, i.drive_time_from_prev,
+  /* The WHOLE itinerary now, not the next eight. Trip and Plan were two tabs
+     over one table: Plan listed every intention, Trip listed the next eight of
+     the same rows under a different heading, and both opened the same detail
+     screen. The cap and the split both went with the merge — one screen, one
+     fetch, and the client decides which band a place belongs to.
+
+     Undated ones are NOT sorted to the bottom here. They keep Lily's seq, and
+     the client bands them; ordering is a display decision and this endpoint
+     should not pre-empt it.
+
+     Faded, undated, ordered by Lily's original sequence. These are hopes.
+     Nothing here is ever marked late, missed, or overdue. */
+  const placeRows = await env.roadtrip.prepare(
+    `SELECT i.id, i.name, i.kind, i.seq, i.planned_arrival, i.planned_nights,
+            i.drive_time_from_prev, i.dropped,
             (SELECT COUNT(*) FROM activity a WHERE a.intention_id = i.id) AS activities,
+            (SELECT COUNT(*) FROM activity a WHERE a.intention_id = i.id AND a.done = 1) AS did,
             (SELECT COUNT(*) FROM reservation r WHERE r.intention_id = i.id AND r.booked = 1) AS booked
        FROM intention i
-      WHERE i.dropped = 0
       ORDER BY i.seq`).all();
-  const ahead = { results: aheadAll.results.filter((i) => !everVisited.has(i.id)).slice(0, 8) };
+  for (const r of placeRows.results) r.visited = everVisited.has(r.id) ? 1 : 0;
 
   return json({
     departure: meta.departure_date,
+    today: today_,
     days: days.results,
-    ahead: ahead.results,
+    places: placeRows.results,
+    // Kept so a phone still running the previous shell does not lose its
+    // "Coming up" section between the deploy and its next refresh.
+    ahead: placeRows.results
+      .filter((i) => !i.visited && !i.dropped).slice(0, 8),
   });
 }
 
