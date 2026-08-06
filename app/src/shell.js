@@ -99,9 +99,41 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .dial.solo{margin:16px auto 2px}
   .herocap{margin:0 0 14px;text-align:center;font-size:12.5px;color:var(--ink-2)}
   /* Darkest where the words are, clearing toward the rim so the picture still
-     reads as a picture. */
+     reads as a picture. Pulled back from .74/.66/.30/.10 on 2026-08-06 — Andy:
+     "a bit too dark". The prompt still reads at .52; the photograph survives. */
   .dialscrim{position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,
-    rgba(20,12,6,.74) 0%, rgba(20,12,6,.66) 34%, rgba(20,12,6,.30) 66%, rgba(20,12,6,.10) 100%)}
+    rgba(20,12,6,.52) 0%, rgba(20,12,6,.44) 32%, rgba(20,12,6,.18) 64%, rgba(20,12,6,.06) 100%)}
+  /* The recessive dial. The four who watch get the same instrument the two who
+     drive get, visibly theirs-to-see rather than theirs-to-use: buttons at 40%,
+     no scrim, so the photograph stays a photograph. Touching one brings the
+     whole thing up to the girls' version — prompt, arrow, lit button — for six
+     seconds. That is the point of showing it at all: a parent who can read
+     "Where are you sleeping? Is it cool?" has something to text about, and
+     those prompts are aimed at the surfaces sitting at zero. */
+  .dial.ghost .dialbtn{opacity:.40;border-color:rgba(255,255,255,.65);
+    transition:opacity .3s ease, box-shadow .3s ease}
+  .dial.ghost .dialscrim,.dial.ghost .dialprompt,.dial.ghost .dialarrow{
+    opacity:0;transition:opacity .3s ease}
+  /* At rest the cycling highlight would be a blinking orange ring on somebody's
+     photograph, so the flattened shadow is scoped to :not(.awake) — and the lit
+     ring is restated at .awake. Both halves matter: .dial.ghost .dialbtn is
+     three classes and .dialbtn.lit is two, so an unscoped shadow here wins on
+     specificity and silently swallows the highlight in BOTH states. It did.
+     The class was set correctly the whole time; only the rendered picture
+     showed it. */
+  .dial.ghost:not(.awake) .dialbtn{box-shadow:0 2px 7px rgba(20,12,6,.28)}
+  .dial.ghost.awake .dialbtn{opacity:.94}
+  .dial.ghost.awake .dialbtn.lit{box-shadow:0 0 0 3px var(--sun), 0 5px 16px rgba(200,98,31,.45)}
+  .dial.ghost.awake .dialscrim,.dial.ghost.awake .dialprompt,.dial.ghost.awake .dialarrow{opacity:1}
+  /* Fixed, like the offline-queue banner, because a viewer can touch a control
+     on five different screens and the line has to land the same way on all of
+     them. */
+  .denytoast{position:fixed;left:50%;transform:translateX(-50%);
+    bottom:calc(var(--nav-h) + var(--safe-bot) + 12px);width:min(92vw,420px);z-index:60;
+    background:rgba(20,12,6,.94);color:#fff;border-radius:13px;padding:11px 14px;
+    font-size:13px;line-height:1.4;box-shadow:0 6px 24px rgba(0,0,0,.4);
+    opacity:0;pointer-events:none;transition:opacity .22s ease, transform .22s ease}
+  .denytoast.on{opacity:1;transform:translateX(-50%) translateY(-4px)}
   .dialprompt{position:absolute;z-index:2;left:50%;top:50%;transform:translate(-50%,-50%);
     width:52%;color:#fff;font-size:13px;font-weight:700;line-height:1.3;text-align:center;
     text-shadow:0 1px 4px rgba(0,0,0,.75);pointer-events:none}
@@ -182,10 +214,11 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .navbar button{flex:1;min-width:0;overflow:hidden;border:0;background:none;font:inherit;font-size:10.5px;
     letter-spacing:-.1px;color:var(--ink-3);display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:4px;cursor:pointer;padding:8px 2px;border-radius:11px;margin:6px 2px;
-    /* Wraps rather than clips. overflow:hidden stopped the long label painting
-       outside its box, but then cut "Photos · Journal" to "Photos · Journa" —
-       and Andy asked for both words. Every other label is one short word, so
-       nothing else wraps. */
+    /* Wraps rather than clips. overflow:hidden stopped a long label painting
+       outside its box, but then cut "Photos · Journal" to "Photos · Journa".
+       That label became "Memories" on 2026-08-06 and every label is now one
+       short word, so nothing wraps — this stays as the guard for the next
+       long one rather than as a live fix. */
     white-space:normal;text-align:center;line-height:1.15}
   .navbar button .ic{font-size:22px;line-height:1}
   .navbar button.on{color:var(--sun);font-weight:640;background:var(--sun-soft)}
@@ -210,17 +243,17 @@ export const SHELL = String.raw`<!DOCTYPE html>
   <section class="screen" id="s-res"></section>
   <section class="screen" id="s-stop"></section>
   <section class="screen" id="s-staying"></section>
-  <section class="screen" id="s-journal"></section>
-  <section class="screen" id="s-photos"></section>
+  <section class="screen" id="s-memories"></section>
   <section class="screen" id="s-badges"></section>
 
   <div class="queued" id="queued"></div>
+  <div class="denytoast" id="denytoast"></div>
 
   <nav class="navbar">
     <button class="on" data-tab="today"><span class="ic">&#128205;</span>Today</button>
     <button data-tab="trip"><span class="ic">&#128197;</span>Trip</button>
     <button data-tab="map"><span class="ic">&#128506;</span>Map</button>
-    <button data-tab="photos" style="font-size:9px"><span class="ic">&#128247;&#9997;</span>Photos &middot; Journal</button>
+    <button data-tab="memories"><span class="ic">&#128247;&#9997;</span>Memories</button>
     <button data-tab="badges"><span class="ic">&#127941;</span>Badges</button>
     <button data-tab="places"><span class="ic">&#128204;</span>Plan</button>
   </nav>
@@ -304,9 +337,9 @@ function paintHero(){
 }
 /* Tapping the picture deals another one. It used to open the photo full size;
    Andy would rather it shuffle, and photos are still openable from the
-   Photos-and-Journal tab. */
+   Memories tab. */
 function openHero(){
-  if (!HERO.length) { tab("photos"); return; }
+  if (!HERO.length) { tab("memories"); return; }
   HERO_I++;
   paintHero();
 }
@@ -497,12 +530,62 @@ function doDelete(kind, id){
   send(url, "DELETE", { id: id }).then(function(){
     if (day) loadDay(LAST_DAY);
     else if (kind === "badge") tab("badges");
-    else if (kind === "journal" || kind === "observation" || kind === "photo") tab("photos");
+    else if (kind === "journal" || kind === "observation" || kind === "photo") tab("memories");
     else tab("today");
   });
 }
+/* --- Role as presentation, not as a gate --------------------------------
+   Until 2026-08-06 role was a gate: eleven places in this file rendered a
+   control for the two authors and an empty string for the four viewers, so
+   the parents were running a visibly thinner app than the girls. It was never
+   a security mechanism — all ten write endpoints answer a viewer with
+   403 "authors only" and the two badge routes mirror the owner-or-author rule
+   exactly, so nothing here is load-bearing for safety.
+
+   Now the same markup renders for everyone and role decides only how it LOOKS
+   and what a touch DOES. One rule governs which controls appear:
+
+     capture and edit affordances render for all six; DESTRUCTIVE ones render
+     only for the people who can actually use them.
+
+   You show someone the instrument. You do not hand them the shredder — and
+   Delete is two taps, so a viewer would arm it, commit it, and only then be
+   told no, which reads as "I broke something". delBtn and the lightbox's
+   Delete stay gated for that reason and no other. */
+function canWrite(){ return !!(ME && ME.role === "author"); }
+
+/* Named people, not roles. "Insufficient permissions" is what software says;
+   these four already know exactly who is driving. */
+var DENY = {
+  gas:      "This is the button Lily and Ada tap at the pump. Only the two of them record stops — you get to watch it happen.",
+  food:     "Lily and Ada tap this when they eat somewhere worth remembering.",
+  campsite: "This is what Lily and Ada tap when they pull in somewhere for the night.",
+  lodging:  "Lily and Ada tap this for a motel, or somebody's couch.",
+  event:    "Lily and Ada tap this when they go somewhere worth remembering.",
+  journal:  "Writing is Lily and Ada's. This is where an entry of theirs would go.",
+  photo:    "Adding photographs here is Lily and Ada's. Yours arrive on their own, out of the message thread.",
+  activity: "Ticking things off the list is Lily's to do.",
+  staying:  "Lily and Ada say where they actually ended up. This is that button.",
+  _:        "Only Lily and Ada can change this — you get to watch it happen."
+};
+var DENY_T = null;
+function deny(kind, ev){
+  if (ev) ev.stopPropagation();
+  var t = el("denytoast");
+  if (t) { t.innerHTML = DENY[kind] || DENY._; t.classList.add("on"); }
+  /* Waking the dial is the whole idea: for six seconds the parents are looking
+     at exactly the girls' Today screen, prompt and all. */
+  var d = el("dial");
+  if (d) { d.classList.add("awake"); if (el("dialprompt")) promptFor(kind); }
+  if (DENY_T) clearTimeout(DENY_T);
+  DENY_T = setTimeout(function(){
+    var tt = el("denytoast"); if (tt) tt.classList.remove("on");
+    var dd = el("dial"); if (dd) dd.classList.remove("awake");
+  }, 6000);
+}
+
 function delBtn(kind, id){
-  if (!ME || ME.role !== "author") return "";
+  if (!canWrite()) return "";
   return '<button id="del-' + id + '" onclick="armDelete(\'' + kind + '\',\'' + id +
     '\',event)" style="border:0;background:none;font:inherit;font-size:12px;' +
     'color:#a49a8e;cursor:pointer;padding:4px 0">Delete</button>';
@@ -520,7 +603,7 @@ function tab(name){
   if(name==="today") loadToday();
   if(name==="trip") loadTrip();
   if(name==="map") loadMapScreen();
-  if(name==="photos") loadPhotos();
+  if(name==="memories") loadMemories();
   if(name==="badges") loadBadges();
   if(name==="places") loadPlaces();
   // "map" is no longer a tab — it lives at the head of Trip and opens full
@@ -556,10 +639,10 @@ function loadToday(){
         '<p class="tiny" style="margin:5px 0 0">' +
           (t.confirmation ? 'Receipt <span class="conf">' + esc(t.confirmation) + '</span> &middot; ' : '') +
           (t.cost != null ? '$' + t.cost.toFixed(2) : '') + '</p></div>' +
-        (ME && ME.role === "author"
-          ? '<button class="ghostbtn" onclick="openStaying()">' +
-            (t.actual ? "Change where we are staying" : "We are staying somewhere else") +
-            '</button>' : '');
+        '<button class="ghostbtn" onclick="' +
+          (canWrite() ? 'openStaying()' : 'deny(\'staying\',event)') + '">' +
+          (t.actual ? "Change where we are staying" : "We are staying somewhere else") +
+        '</button>';
       if (d.planned_tonight) {
         tonight += '<p class="tiny" style="margin:9px 0 0">Plan said: ' +
           esc(d.planned_tonight.name) + '. Left as it was — it is a plan, not a promise.</p>';
@@ -607,38 +690,39 @@ function loadToday(){
        matching button lights up so the sentence and its target are visibly
        connected. Touching a button switches the centre to that button's line.
        The photo behind it changes hourly and again at every vehicle stop. */
-    var grid = (ME && ME.role==="author")
-      ? '<div class="dial" id="dial">' +
-          '<div class="dialcentre" id="dialcentre" onclick="openHero()">' +
-            '<img id="dialphoto" alt="">' +
-            '<div class="dialscrim"></div>' +
-          '</div>' +
-          '<div class="dialprompt" id="dialprompt"></div>' +
-          '<span class="dialarrow" id="dialarrow">&#10148;</span>' +
-          kinds.map(function(k,i){
-            var act = k === "journal" ? "openJot()" : "saveStop(\'"+k+"\')";
-            var ic = k === "journal" ? "&#9997;" : ICON[k];
-            var a = (-90 + i*60) * Math.PI/180, R = 36;
-            var x = (50 + R*Math.cos(a)).toFixed(2), y = (50 + R*Math.sin(a)).toFixed(2);
-            return '<button class="dialbtn" id="dial-'+k+'" style="left:'+x+'%;top:'+y+'%" ' +
-              'onclick="'+act+'" ontouchstart="promptFor(\''+k+'\')" ' +
-              'onmouseenter="promptFor(\''+k+'\')">' +
-              '<span class="ic">'+ic+'</span><span class="lb">'+KLABEL[k]+'</span></button>';
-          }).join("") +
-        '</div>'
-      /* The parents get the picture without the controls. The dial was
-         author-only from the start — the six buttons write stops and a viewer's
-         write is refused server-side — so Jana, Amelia and David were looking at
-         a mostly empty Today screen. They are the ones sitting at home wanting
-         to see the trip, so they arguably want the photograph MOST. No scrim
-         and no prompt here: nothing has to be legible over it, so the picture
-         gets to be a picture. Tapping deals another one, same as for the girls. */
-      : '<div class="dial solo" id="dial">' +
-          '<div class="dialcentre" id="dialcentre" onclick="openHero()">' +
-            '<img id="dialphoto" alt="">' +
-          '</div>' +
+    /* ONE dial for all six. It used to fork: the girls got the instrument, the
+       parents got a bare photograph — which meant four of the six were running
+       a visibly thinner app and none of them could see what the other two were
+       looking at. Now the same markup renders for everyone; a viewer's copy
+       carries .ghost, which recesses the buttons and hides the scrim so the
+       photograph is a photograph, and a touch wakes it to the girls' version
+       for six seconds while the toast names who the buttons belong to.
+
+       The caption is no longer viewer-only either. It was the one place the
+       asymmetry ran BACKWARDS — the parents were told who took the picture and
+       when, and the girls were not. */
+    var author = canWrite();
+    var grid =
+      '<div class="dial' + (author ? '' : ' ghost') + '" id="dial">' +
+        '<div class="dialcentre" id="dialcentre" onclick="openHero()">' +
+          '<img id="dialphoto" alt="">' +
+          '<div class="dialscrim"></div>' +
         '</div>' +
-        '<p class="herocap" id="herocap"></p>';
+        '<div class="dialprompt" id="dialprompt"></div>' +
+        '<span class="dialarrow" id="dialarrow">&#10148;</span>' +
+        kinds.map(function(k,i){
+          var act = author ? (k === "journal" ? "openJot()" : "saveStop(\'"+k+"\')")
+                           : "deny(\'"+k+"\',event)";
+          var ic = k === "journal" ? "&#9997;" : ICON[k];
+          var a = (-90 + i*60) * Math.PI/180, R = 36;
+          var x = (50 + R*Math.cos(a)).toFixed(2), y = (50 + R*Math.sin(a)).toFixed(2);
+          return '<button class="dialbtn" id="dial-'+k+'" style="left:'+x+'%;top:'+y+'%" ' +
+            'onclick="'+act+'" ontouchstart="promptFor(\''+k+'\')" ' +
+            'onmouseenter="promptFor(\''+k+'\')">' +
+            '<span class="ic">'+ic+'</span><span class="lb">'+KLABEL[k]+'</span></button>';
+        }).join("") +
+      '</div>' +
+      '<p class="herocap" id="herocap"></p>';
     applyCycle(d.cycle);
     HERO = d.hero || [];
     // Hourly, and again at every stop — so the picture is different when they
@@ -651,7 +735,9 @@ function loadToday(){
       undo + grid + tonight + last;
     if (el("dial")) {
       paintHero();
-      // Only the girls' version has prompts to cycle.
+      /* Cycles for all six. On a viewer's dial the prompt and the lit ring are
+         held at opacity 0 by CSS until a touch wakes it, so the cycle costs
+         them nothing and is already in the right place when it does. */
       if (el("dialprompt")) { DIAL_I = 0; showPrompt(); startDial(); }
     }
   });
@@ -979,9 +1065,11 @@ function loadDay(date){
         : '') +
       '<h2>Places</h2>' + (placeRows || '<p class="empty">The car didn\'t stop near a planned place this day.</p>') +
       '<h2>Journal</h2>' + (journal || '<p class="empty">Nothing written yet.</p>') +
-      (ME && ME.role==="author"
-        ? '<div class="card" style="margin-top:9px"><textarea id="j-body" placeholder="What happened today?"></textarea>' +
-          '<button class="ghostbtn" onclick="saveJournal(\''+date+'\')">Save entry</button></div>' : '') +
+      '<div class="card" style="margin-top:9px"><textarea id="j-body" placeholder="What happened today?"' +
+        (canWrite() ? '' : ' readonly') + '></textarea>' +
+        '<button class="ghostbtn" onclick="' +
+        (canWrite() ? 'saveJournal(\''+date+'\')' : 'deny(\'journal\',event)') +
+        '">Save entry</button></div>' +
       '<h2>Stops</h2>' + stops;
   });
 }
@@ -1050,7 +1138,7 @@ function saveJournalFeed(){
     if (loc) { payload.lat = loc.lat; payload.lon = loc.lon; }
     send("/api/journal","POST",payload).then(function(r){
       if (!r || !r.ok) { alertInline(t, "Couldn't save — try again."); return; }
-      loadPhotos();
+      loadMemories();
     });
   });
 }
@@ -1133,7 +1221,7 @@ function loadBadges(){
       BADGES[b.id] = b;
       // The awarder can always remove their own (delBtn is authors-only, and
       // a viewer must be able to undo a mistaken award).
-      var mine = ME && (ME.id === b.awarded_by || ME.role === "author");
+      var mine = ME && (ME.id === b.awarded_by || canWrite());
       var linkBtn = 'border:0;background:none;font:inherit;font-size:12px;' +
         'color:#a49a8e;cursor:pointer;padding:4px 0';
       var rm = mine
@@ -1264,18 +1352,18 @@ function photoThumbHtml(p, from){
   var src = p.thumb_key ? "/photo/"+p.thumb_key : "/photo/"+p.r2_key;
   return '<img class="thumb" loading="lazy" src="'+esc(src)+'" ' +
     'style="width:100%;height:112px;border-radius:10px;object-fit:cover;cursor:pointer;background:#eceae6" ' +
-    'onclick="openPhoto(\''+esc(p.id)+'\',\''+esc(p.r2_key)+'\',\''+(from||"photos")+'\')">';
+    'onclick="openPhoto(\''+esc(p.id)+'\',\''+esc(p.r2_key)+'\',\''+(from||"memories")+'\')">';
 }
 
 var PHOTO_META = {};
 /* Photos and journal, one stream, grouped by day — pictures and words
    together. This is the trip reading itself back; the eventual viewbook is
    this screen with better paper. */
-function loadPhotos(){
-  show("photos");
+function loadMemories(){
+  show("memories");
   Promise.all([get("/api/photos"), get("/api/journal-feed")]).then(function(res){
     var d = res[0], j = res[1];
-    if (!d) { offlineInto("s-photos", "loadPhotos()"); return; }
+    if (!d) { offlineInto("s-memories", "loadMemories()"); return; }
     PHOTO_META = {};
     d.photos.forEach(function(p){ PHOTO_META[p.id] = p; });
 
@@ -1294,7 +1382,7 @@ function loadPhotos(){
       var g = byDate[dt];
       var photos = g.photos.length
         ? '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">' +
-          g.photos.map(function(p){ return photoThumbHtml(p, "photos"); }).join("") + '</div>'
+          g.photos.map(function(p){ return photoThumbHtml(p, "memories"); }).join("") + '</div>'
         : '';
       var words = g.words.map(function(e){
         var tag = e.source === "observation"
@@ -1308,20 +1396,24 @@ function loadPhotos(){
       return '<h2>' + fmtDay(dt) + '</h2>' + photos + words;
     }).join("");
 
-    var uploader = (ME && ME.role === "author")
-      ? '<input type="file" id="ph-files" accept="image/*" multiple style="display:none" ' +
-          'onchange="uploadPhotos(this.files)">' +
+    /* Both render for all six now. A viewer's file input is deliberately not
+       wired: opening a picker and then refusing the upload is a worse lie than
+       never opening it. */
+    var uploader =
+      (canWrite() ? '<input type="file" id="ph-files" accept="image/*" multiple style="display:none" ' +
+          'onchange="uploadPhotos(this.files)">' : '') +
         // Progress lives IN the fixed bar with the button; it used to render at
         // the bottom of a long scroll, so the tap looked dead on slow wifi.
         '<div class="actionbar"><div id="ph-progress"></div><button class="bigbtn" ' +
-          'onclick="el(\'ph-files\').click()">Add photos</button></div>'
-      : '';
-    var composer = (ME && ME.role === "author")
-      ? '<div class="card"><textarea id="jf-body" placeholder="What happened today?"></textarea>' +
-        '<button class="ghostbtn" onclick="saveJournalFeed()">Save entry</button></div>'
-      : '';
+          'onclick="' + (canWrite() ? 'el(\'ph-files\').click()' : 'deny(\'photo\',event)') +
+          '">Add photos</button></div>';
+    var composer = '<div class="card"><textarea id="jf-body" placeholder="What happened today?"' +
+        (canWrite() ? '' : ' readonly') + '></textarea>' +
+        '<button class="ghostbtn" onclick="' +
+        (canWrite() ? 'saveJournalFeed()' : 'deny(\'journal\',event)') +
+        '">Save entry</button></div>';
     var nP = d.photos.length, nW = ((j && j.entries) || []).length;
-    el("s-photos").innerHTML = '<h1>Photos &amp; Journal</h1><p class="sub">' +
+    el("s-memories").innerHTML = '<h1>Memories</h1><p class="sub">' +
       (nP || nW ? nP + ' photo' + (nP===1?'':'s') + ' &middot; ' + nW + ' entr' + (nW===1?'y':'ies')
                 : 'Nothing here yet') + '</p>' +
       '<div id="ph-viewer"></div>' + composer +
@@ -1329,7 +1421,6 @@ function loadPhotos(){
       uploader;
   });
 }
-function loadJournal(){ loadPhotos(); }
 
 
 function openPhoto(id, key, from){
@@ -1348,7 +1439,7 @@ function openPhoto(id, key, from){
     '<span>' +
       (p.lat != null ? '<button class="ghostbtn" style="margin:0;padding:4px 10px" ' +
         'onclick="tab(\'map\')">On the map</button> ' : '') +
-      (ME && ME.role === "author"
+      (canWrite()
         ? '<button id="del-'+esc(id)+'" onclick="armDelete(\'photo\',\''+esc(id)+'\',event)" ' +
           'style="border:0;background:none;font:inherit;font-size:12px;color:#a49a8e;' +
           'cursor:pointer;padding:4px 0">Delete</button>' : '') +
@@ -1435,7 +1526,7 @@ function uploadPhotos(files){
   // starve each other; one at a time finishes sooner and reports honestly.
   (function next(){
     var f = list.shift();
-    if (!f) { done && loadPhotos(); return; }
+    if (!f) { done && loadMemories(); return; }
     f.arrayBuffer().then(function(buf){
       var meta = exifGps(buf);
       // The server has always been able to dedupe on sha256 and to treat
@@ -1503,10 +1594,12 @@ function loadPlace(id, from){
     }
     var i = d.intention;
     var acts = d.activities.map(function(a){
-      var tappable = ME && ME.role === "author";
-      return '<li' + (tappable
-        ? ' onclick="tickActivity(\''+a.id+'\','+(a.done?0:1)+',\''+id+'\')"'
-        : ' style="cursor:default"') + '>' +
+      /* The row stays tappable for a viewer — it just answers with a line
+         about whose list it is instead of a silent cursor:default, which read
+         as the app being broken. */
+      return '<li onclick="' + (canWrite()
+        ? 'tickActivity(\''+a.id+'\','+(a.done?0:1)+',\''+id+'\')'
+        : 'deny(\'activity\',event)') + '">' +
         '<span class="box'+(a.done?" done":"")+'"></span><span'+(a.done?' class="done-txt"':'')+'>' +
         esc(a.name)+(a.distance_mi?' &middot; '+a.distance_mi+' mi':'') +
         (a.detail&&!a.done?'<span class="hers">'+esc(a.detail)+'</span>':'')+'</span></li>';

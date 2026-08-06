@@ -216,11 +216,15 @@ export async function today(env) {
   // Today screen. Costs three of Lily's day-1 camp shots, which were parked
   // beyond breadcrumb tolerance; they are still in Photos, and if the strays
   // get deleted this filter can be dropped.
+  // The lat filter was a proxy for "not a screenshot from home" while five
+  // strays sat in the table. Andy deleted them 2026-08-06, and the proxy was
+  // costing more than it caught: Lily's camp shots arrive with GPS stripped by
+  // her phone and no breadcrumb close enough to place them, so the pictures
+  // most worth showing were the ones being excluded.
   const heroShots = await env.roadtrip.prepare(
     `SELECT p.id, p.thumb_key, p.r2_key, p.date, p.taken_at,
             COALESCE(pe.name, '') AS author
        FROM photo p LEFT JOIN person pe ON pe.id = p.author_id
-      WHERE p.lat IS NOT NULL
       ORDER BY p.taken_at DESC LIMIT 40`).all();
 
   return json({
