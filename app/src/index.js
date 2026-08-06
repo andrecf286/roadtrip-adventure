@@ -14,7 +14,14 @@ import { STATE_ARCS } from "./geo.js";
 import { STATE_ARCS_FINE } from "./geo_fine.js";
 
 const json = (o, s = 200) =>
-  new Response(JSON.stringify(o), { status: s, headers: { "content-type": "application/json" } });
+  // no-store on EVERY response from this file. /api/version and /api/me are
+  // served from here rather than api.js's json(), and the omission meant the
+  // version endpoint was the only reply in the app with no cache directive at
+  // all — so a phone could cache {v:<old>} and poll a URL it never re-fetched
+  // for the rest of the trip. That is the "some phones don't update" bug: the
+  // update check itself was being served from cache.
+  new Response(JSON.stringify(o), { status: s, headers: {
+    "content-type": "application/json", "cache-control": "no-store" } });
 
 /* Version = hash of the shell actually being served. Zero maintenance: a
    deploy changes the shell, the hash changes, open phones notice on their
@@ -162,7 +169,10 @@ export default {
       return new Response(signedOutPage(), { status: 401, headers: { "content-type": "text/html" } });
     }
 
-    return new Response(SHELL, {
+    // The shell is stamped with its own hash. It used to adopt whatever the
+    // first successful poll returned, so a phone that booted with no signal
+    // seeded itself from the NEXT deploy and believed stale code was current.
+    return new Response(SHELL.replace("__APPV__", await shellVersion()), {
       headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
     });
   },

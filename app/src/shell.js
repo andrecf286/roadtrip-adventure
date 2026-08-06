@@ -35,7 +35,7 @@ export const SHELL = String.raw`<!DOCTYPE html>
   html,body{margin:0;padding:0;background:var(--paper);color:var(--ink);
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
     overscroll-behavior-y:none}
-  .screen{display:none;min-height:100dvh;padding:calc(20px + var(--safe-top)) 18px calc(var(--nav-h) + 58px + var(--safe-bot))}
+  .screen{display:none;min-height:100vh;min-height:100dvh;padding:calc(20px + var(--safe-top)) 18px calc(var(--nav-h) + 58px + var(--safe-bot))}
   .screen.on{display:block}
   h1{font-size:27px;line-height:1.15;margin:0 0 3px;letter-spacing:-.5px}
   h2{font-size:12px;text-transform:uppercase;letter-spacing:.9px;color:var(--ink-3);margin:24px 0 9px;font-weight:600}
@@ -68,6 +68,15 @@ export const SHELL = String.raw`<!DOCTYPE html>
   @font-face{font-family:'Bling';src:url('/font/title.woff2') format('woff2');
     font-weight:400;font-style:normal;font-display:swap}
   .dial{position:relative;width:min(92vw,360px);aspect-ratio:1;margin:16px auto 4px}
+  /* aspect-ratio needs Safari 15. Without these the dial gets width and NO
+     height, taking the six record buttons and the photo down with it — the
+     whole capture surface would simply not be there. */
+  @supports not (aspect-ratio: 1){
+    .dial{height:0;padding-bottom:min(92vw,360px)}
+    .dialbtn{height:auto;padding:14px 0}
+    .dialcentre{height:0;padding-bottom:82%}
+    .parkposter img{height:150px}
+  }
   /* Buttons sit ON the picture, small, around its edge — the photo is the
      ground rather than a hole in the middle of a ring. z-index over the
      scrim so a dark shot never swallows one. */
@@ -110,6 +119,13 @@ export const SHELL = String.raw`<!DOCTYPE html>
     -webkit-background-clip:text;background-clip:text;color:transparent;
     -webkit-text-fill-color:transparent;
     filter:drop-shadow(0 1px 0 rgba(255,255,255,.85)) drop-shadow(0 2px 3px rgba(80,40,10,.22))}
+  /* Every other control has an :active state; ghostbtn was missed, and
+     -webkit-tap-highlight-color:transparent removed the system flash — so
+     "Try again", "Save entry", "Award it", "Booking page" and the map controls
+     all looked dead until the network came back. */
+  .ghostbtn:active{background:var(--tap)}
+  .navbar button:active{background:var(--tap)}
+  .back:active{opacity:.55}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .kind{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:17px 12px;
     text-align:center;cursor:pointer;min-height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px}
@@ -139,10 +155,18 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .maparea{position:relative;height:340px;border-radius:var(--r);overflow:hidden;border:1px solid var(--line);background:#eef1ec}
   .badges{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
   .badge{background:var(--road-soft);color:var(--road);border-radius:99px;padding:7px 12px;font-size:12.5px;font-weight:600}
-  .navbar{position:fixed;left:0;right:0;bottom:0;height:calc(var(--nav-h) + var(--safe-bot));
-    background:color-mix(in srgb, var(--paper) 96%, transparent);backdrop-filter:blur(12px);border-top:1px solid var(--line);
+  /* --paper-soft is computed in JS, because color-mix() needs Safari 16.2 and
+     an unsupported value invalidates the WHOLE declaration — leaving the nav
+     with no background at all, so the page scrolled visibly through it. That
+     is the "nav floats with the scroll" report. Height no longer includes the
+     safe-area inset either: Safari reports that inset as 0 with the toolbar
+     open and ~34px once it collapses on scroll, so the bar was resizing
+     mid-gesture. Only the padding varies now; the button row never moves. */
+  .navbar{position:fixed;left:0;right:0;bottom:0;height:var(--nav-h);box-sizing:content-box;
+    background:var(--paper-soft,var(--paper));
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);border-top:1px solid var(--line);
     display:flex;z-index:45;padding-bottom:var(--safe-bot);max-width:640px;margin:0 auto}
-  .navbar button{flex:1;min-width:0;border:0;background:none;font:inherit;font-size:10.5px;
+  .navbar button{flex:1;min-width:0;overflow:hidden;border:0;background:none;font:inherit;font-size:10.5px;
     letter-spacing:-.1px;color:var(--ink-3);display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:4px;cursor:pointer;padding:8px 2px;border-radius:11px;margin:6px 2px;
     white-space:nowrap}
@@ -187,8 +211,12 @@ export const SHELL = String.raw`<!DOCTYPE html>
 <script>
 var ME = null, POS = null;
 
-function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){
-  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+/* The apostrophe is escaped too: esc() output is interpolated into
+   single-quoted JS string literals inside double-quoted HTML attributes in
+   about fifteen places, and this file already carries a note about a prior
+   stored-XSS hole from an id reaching an attribute unescaped. */
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
 /* Notes are full of links they found. Split the RAW text on URLs and escape
    each piece separately — never regex over already-escaped text, which is how
    the earlier stored-XSS hole opened (an id flowed into an attribute unescaped).
@@ -205,8 +233,14 @@ function linkify(s){
 }
 function el(id){ return document.getElementById(id); }
 function get(u){
-  return fetch(u,{credentials:"same-origin"})
-    .then(function(r){ return r.json(); })
+  // no-store: iOS was serving /api/version from its heuristic cache, which is
+  // how a phone could stop noticing new deploys entirely.
+  return fetch(u,{credentials:"same-origin",cache:"no-store"})
+    // A JSON error body is TRUTHY, so it slipped past every if(!d) guard and
+    // then threw on d.days / d.stops / d.places inside the .then — a blank
+    // screen with a nav bar, which is the failure boot was hardened against.
+    // An expired 120-day cookie on a page left open would do exactly this.
+    .then(function(r){ return r.ok ? r.json() : null; })
     .catch(function(){ return null; });
 }
 /* Renders a recoverable message into a screen whose data never arrived,
@@ -300,6 +334,10 @@ function applyCycle(n){
   CYCLE = n || 0;
   var c = PALETTE[Math.abs(CYCLE) % PALETTE.length];
   document.documentElement.style.setProperty("--paper", c);
+  // Same colour at 96%, built here so the nav never depends on color-mix().
+  var r = parseInt(c.slice(1,3),16), g = parseInt(c.slice(3,5),16), b = parseInt(c.slice(5,7),16);
+  document.documentElement.style.setProperty("--paper-soft",
+    "rgba(" + r + "," + g + "," + b + ",.96)");
   var m = document.querySelector('meta[name="theme-color"]');
   if (m) m.setAttribute("content", c);
 }
@@ -354,16 +392,24 @@ window.addEventListener("resize", padForActionbar);
    the old shell until somebody texted "close it and reopen." The served
    shell hashes itself; when the hash moves, a bar offers one-tap refresh.
    Never auto-reloads — half-typed journal entries outrank freshness. */
-var APP_V = null;
+/* Substituted at serve time with the hash of this very shell. Inferring it
+   from the first poll meant a phone that opened with no signal adopted the
+   NEXT deploy's hash as its own and never offered a refresh again. */
+var APP_V = "__APPV__";
 function checkVersion(){
   get("/api/version").then(function(v){
     if (!v || !v.v) return;
-    if (APP_V === null) { APP_V = v.v; return; }
+    // Only seed if the placeholder somehow survived substitution.
+    if (APP_V === "__APP" + "V__") { APP_V = v.v; return; }
     if (v.v !== APP_V) {
       var q = el("updatebar");
       if (!q) {
         q = document.createElement("div");
         q.id = "updatebar"; q.className = "queued on";
+        // Sits ABOVE the offline-queue pill, which shares this class and this
+        // box. Stale code and unsent stops both follow a dead zone, so the two
+        // bars turn up together and the later one was burying the other.
+        q.style.bottom = "calc(var(--nav-h) + var(--safe-bot) + 132px)";
         q.style.cursor = "pointer";
         q.innerHTML = "The app has been updated &mdash; tap to refresh";
         q.onclick = function(){ location.reload(); };
@@ -373,6 +419,10 @@ function checkVersion(){
   });
 }
 document.addEventListener("visibilitychange", function(){ if (!document.hidden) checkVersion(); });
+/* iOS restores from the back-forward cache without re-running anything — after
+   the reservation's "Booking page" link, or a standalone resume. visibilitychange
+   does not always fire on that path. */
+window.addEventListener("pageshow", function(e){ if (e.persisted) checkVersion(); });
 
 /* Today keeps itself current: while it is the visible screen, re-pull every
    90 seconds so the live miles tick along without anyone tab-hopping. The
@@ -787,11 +837,17 @@ function saveStaying(kind){
   var item = { client_id:id, kind:kind, occurred_at:new Date().toISOString(), tz_offset:off,
                place:(n && n.value.trim()) || null, note:(note && note.value.trim()) || null };
   function done(){ enqueue(item); tab("today"); }
+  // Latched, exactly as saveStop is: an unanswered iOS permission prompt fires
+  // NEITHER callback, and without this the stay was never enqueued and the tap
+  // did nothing at all.
+  var fired = false;
+  function once(){ if (!fired) { fired = true; done(); } }
+  setTimeout(once, 5000);
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(function(p){
-      item.lat = p.coords.latitude; item.lon = p.coords.longitude; done();
-    }, done, { timeout: 4000, maximumAge: 60000 });
-  } else done();
+      item.lat = p.coords.latitude; item.lon = p.coords.longitude; once();
+    }, once, { timeout: 4000, maximumAge: 60000 });
+  } else once();
 }
 
 function loadTrip(){
@@ -830,7 +886,9 @@ function loadTrip(){
       '<div class="maparea" id="trip-map" style="height:210px;margin-bottom:6px"></div>' +
       '<p class="tiny" style="margin:0 0 4px">Tap the map to open it full size.</p>' +
       past + (ahead ? '<h2>Coming up</h2>'+ahead : '');
-    drawMap("trip-map", 210, function(){ show("map"); loadMapScreen(); });
+    // tab(), not show(): show() swaps screens without moving the nav highlight,
+    // the same stale-highlight defect QA already found on deletes.
+    drawMap("trip-map", 210, function(){ tab("map"); });
   });
 }
 
@@ -1119,7 +1177,7 @@ function awardBadge(){
     var msg = document.createElement("p");
     msg.className = "tiny"; msg.setAttribute("data-err","1");
     msg.style.color = "#a8332a"; msg.style.margin = "6px 0 0";
-    msg.textContent = "Give the badge a name first — the big box.";
+    msg.textContent = "Give the badge a name first — the wide box next to the emoji.";
     t.parentNode.parentNode.appendChild(msg);
     t.focus();
     return;
@@ -1206,9 +1264,10 @@ function loadPhotos(){
     var uploader = (ME && ME.role === "author")
       ? '<input type="file" id="ph-files" accept="image/*" multiple style="display:none" ' +
           'onchange="uploadPhotos(this.files)">' +
-        '<div class="actionbar"><button class="bigbtn" ' +
-          'onclick="el(\'ph-files\').click()">Add photos</button></div>' +
-        '<div id="ph-progress"></div>'
+        // Progress lives IN the fixed bar with the button; it used to render at
+        // the bottom of a long scroll, so the tap looked dead on slow wifi.
+        '<div class="actionbar"><div id="ph-progress"></div><button class="bigbtn" ' +
+          'onclick="el(\'ph-files\').click()">Add photos</button></div>'
       : '';
     var composer = (ME && ME.role === "author")
       ? '<div class="card"><textarea id="jf-body" placeholder="What happened today?"></textarea>' +
@@ -1371,9 +1430,9 @@ function loadPlaces(){
     if (!d) { offlineInto("s-places", "loadPlaces()"); return; }
     var visited = d.places.filter(function(p){ return p.visited; }).length;
     el("s-places").innerHTML = '<h1>Itinerary</h1><p class="sub">'+d.places.length+
-      ' places &middot; '+visited+' reached so far</p>' +
+      ' place'+(d.places.length===1?'':'s')+' &middot; '+visited+' reached so far</p>' +
       d.places.map(function(p){
-      return '<div class="day" onclick="loadPlace(\''+p.id+'\')">' +
+      return '<div class="day" onclick="loadPlace(\''+p.id+'\',\'places\')">' +
         '<div style="flex:1"><div class="row"><b'+(p.visited?'':' style="opacity:.62"')+'>'+esc(p.name)+
         '</b><span class="tiny">'+(p.wanted?p.did+"/"+p.wanted:"")+'</span></div>' +
         '<p class="tiny" style="margin:3px 0 0">'+esc(p.kind||"")+
@@ -1414,9 +1473,9 @@ function loadPlace(id, from){
       '<button class="back" onclick="tab(\''+PLACE_FROM+'\')">&larr;</button>' +
       '<h1>'+esc(i.name)+'</h1><p class="sub">' +
       (i.planned_arrival?'Hoped for '+fmtShort(i.planned_arrival):'No date') +
-      (i.planned_nights?' &middot; '+i.planned_nights+' nights':'') +
+      (i.planned_nights?' &middot; '+i.planned_nights+' night'+(i.planned_nights===1?'':'s'):'') +
       (i.drive_time_from_prev?' &middot; '+esc(i.drive_time_from_prev)+' away':'') + '</p>' +
-      (d.activities.length ? '<h2>'+d.activities.length+' things to see</h2>' +
+      (d.activities.length ? '<h2>'+d.activities.length+' thing'+(d.activities.length===1?'':'s')+' to see</h2>' +
         '<div class="card" style="padding:4px 14px"><ul class="check">'+acts+'</ul></div>' : '') +
       /* Her research, exactly as she typed it into the vault — newlines and
          tab indentation intact via pre-wrap, because the shape of the list IS
@@ -1443,6 +1502,11 @@ function loadRes(id, from){
   RES_BACK = (from === "place" && LAST_PLACE)
     ? "loadPlace('" + LAST_PLACE + "')" : "tab('today')";
   get("/api/reservation?id="+encodeURIComponent(id)).then(function(r){
+    if (r && r.error === "not found") {
+      el("s-res").innerHTML = '<button class="back" onclick="'+RES_BACK+'">&larr;</button>' +
+        '<h1>Not found</h1><p class="sub">That booking is no longer in the plan.</p>';
+      return;
+    }
     if (!r || r.error) { offlineInto("s-res", "loadRes('"+id+"')"); return; }
     var kv = "";
     if(r.check_in_at)  kv += '<div class="kv"><span>Check in</span><b>'+esc(r.check_in_at)+'</b></div>';
@@ -1472,6 +1536,10 @@ function drawMap(containerId, height, onTap){
   Promise.all([get("/api/map"), geo()]).then(function(res){
     var d = res[0], arcs = res[1] || [], box = el(containerId);
     if (!box) return;
+    // mapSvg dereferences d immediately, so a failed fetch threw inside the
+    // .then: the mini-map stayed an empty grey box AND the tap handler below
+    // never got wired, making the caption under it a lie.
+    if (!d) { box.innerHTML = '<p class="empty" style="padding:20px">Map unavailable offline.</p>'; return; }
     box.innerHTML = mapSvg(d, arcs, 360, height);
     if (onTap) { box.style.cursor = "pointer"; box.onclick = onTap; }
   });
@@ -1803,6 +1871,9 @@ function renderBasemap(d){
                minZoom:3, maxZoom:17.5, attributionControl:false };
   if (b) { opts.bounds = b; opts.fitBoundsOptions = { padding: 36 }; }
   else { opts.center = [-98, 42]; opts.zoom = 3.5; }
+  // Each visit built a fresh WebGL context and abandoned the last; iOS starts
+  // dropping contexts after a dozen or so.
+  if (ML_MAP) { try { ML_MAP.remove(); } catch(e){} ML_MAP = null; }
   var map = new maplibregl.Map(opts);
   map.addControl(new maplibregl.AttributionControl({ compact:true }));
   ML_MAP = map; map.__fitBounds = b;
