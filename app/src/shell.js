@@ -67,30 +67,33 @@ export const SHELL = String.raw`<!DOCTYPE html>
      path, same rule as the map tiles. */
   @font-face{font-family:'Bling';src:url('/font/title.woff2') format('woff2');
     font-weight:400;font-style:normal;font-display:swap}
-  .dial{position:relative;width:min(92vw,360px);aspect-ratio:1;margin:16px auto 4px}
+  .dial{position:relative;width:min(96vw,384px);aspect-ratio:1;margin:16px auto 4px}
   /* aspect-ratio needs Safari 15. Without these the dial gets width and NO
      height, taking the six record buttons and the photo down with it — the
      whole capture surface would simply not be there. */
   @supports not (aspect-ratio: 1){
-    .dial{height:0;padding-bottom:min(92vw,360px)}
+    .dial{height:0;padding-bottom:min(96vw,384px)}
     .dialbtn{height:auto;padding:14px 0}
-    .dialcentre{height:0;padding-bottom:82%}
+    .dialcentre{height:0;padding-bottom:98%}
     .parkposter img{height:150px}
   }
   /* Buttons sit ON the picture, small, around its edge — the photo is the
      ground rather than a hole in the middle of a ring. z-index over the
      scrim so a dark shot never swallows one. */
   .dialbtn{position:absolute;z-index:3;transform:translate(-50%,-50%);width:19%;aspect-ratio:1;
-    border-radius:50%;border:1px solid rgba(255,255,255,.85);background:var(--card);
+    border-radius:50%;border:1px solid rgba(255,255,255,.9);background:var(--btn,var(--card));
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
-    font:inherit;cursor:pointer;box-shadow:0 3px 12px rgba(20,12,6,.42);
-    transition:transform .13s ease, box-shadow .13s ease}
-  .dialbtn .ic{font-size:21px;line-height:1}
-  .dialbtn .lb{font-size:9.5px;font-weight:700;color:var(--ink);letter-spacing:-.2px}
+    font:inherit;cursor:pointer;box-shadow:0 3px 12px rgba(20,12,6,.45);
+    transition:transform .13s ease, box-shadow .13s ease, background .3s ease}
+  .dialbtn .ic{font-size:27px;line-height:1}
+  /* Shrikhand ships in ONE weight. Asking for 700 made the browser synthesise
+     a bold, which is what read as smeared at this size — 400 is the real face. */
+  .dialbtn .lb{font-family:'Bling',-apple-system,sans-serif;font-size:13px;font-weight:400;
+    color:var(--ink);letter-spacing:0;line-height:1.05}
   .dialbtn:active{transform:translate(-50%,-50%) scale(.92)}
   .dialbtn.lit{box-shadow:0 0 0 3px var(--sun), 0 5px 16px rgba(200,98,31,.45)}
   .dialcentre{position:absolute;z-index:1;left:50%;top:50%;transform:translate(-50%,-50%);
-    width:82%;aspect-ratio:1;border-radius:50%;overflow:hidden;cursor:pointer;
+    width:98%;aspect-ratio:1;border-radius:50%;overflow:hidden;cursor:pointer;
     background:var(--tap);box-shadow:0 5px 20px rgba(60,40,20,.26)}
   .dialcentre img{width:100%;height:100%;object-fit:cover;display:block}
   /* Darkest where the words are, clearing toward the rim so the picture still
@@ -105,6 +108,14 @@ export const SHELL = String.raw`<!DOCTYPE html>
     text-shadow:0 1px 5px rgba(0,0,0,.95), 0 0 12px rgba(0,0,0,.7);pointer-events:none;
     transition:left .5s cubic-bezier(.34,1.25,.5,1), top .5s cubic-bezier(.34,1.25,.5,1),
                transform .5s cubic-bezier(.34,1.25,.5,1)}
+  .rtpop .maplibregl-popup-content{padding:0;border-radius:14px;overflow:hidden;
+    box-shadow:0 6px 22px rgba(30,20,10,.26)}
+  .popimg{display:block;width:100%;height:150px;object-fit:cover}
+  .popbody{padding:9px 11px 11px}
+  .popt{font-weight:700;font-size:14px;color:var(--ink)}
+  .popm{color:var(--ink-2);font-size:12px;margin-top:2px;line-height:1.35}
+  .popq{margin:6px 0 0;font-size:13px;line-height:1.4;color:var(--ink)}
+  .pophint{margin-top:8px;font-size:11.5px;color:var(--sun);font-weight:660}
   .parkwall{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:11px;margin-bottom:11px}
   .parkposter{margin:0;background:var(--card);border:1px solid var(--line);border-radius:12px;
     overflow:hidden;box-shadow:0 2px 8px rgba(80,60,30,.10)}
@@ -169,7 +180,11 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .navbar button{flex:1;min-width:0;overflow:hidden;border:0;background:none;font:inherit;font-size:10.5px;
     letter-spacing:-.1px;color:var(--ink-3);display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:4px;cursor:pointer;padding:8px 2px;border-radius:11px;margin:6px 2px;
-    white-space:nowrap}
+    /* Wraps rather than clips. overflow:hidden stopped the long label painting
+       outside its box, but then cut "Photos · Journal" to "Photos · Journa" —
+       and Andy asked for both words. Every other label is one short word, so
+       nothing else wraps. */
+    white-space:normal;text-align:center;line-height:1.15}
   .navbar button .ic{font-size:22px;line-height:1}
   .navbar button.on{color:var(--sun);font-weight:640;background:var(--sun-soft)}
   .back{position:sticky;top:calc(6px + var(--safe-top));z-index:50;border:0;background:rgba(255,255,255,.92);
@@ -280,10 +295,13 @@ function paintHero(){
     img.src = "/photo/" + h.thumb;
   }
 }
+/* Tapping the picture deals another one. It used to open the photo full size;
+   Andy would rather it shuffle, and photos are still openable from the
+   Photos-and-Journal tab. */
 function openHero(){
   if (!HERO.length) { tab("photos"); return; }
-  var h = HERO[Math.abs(HERO_I) % HERO.length];
-  if (h) openPhoto(h.id, h.key || h.thumb, "today");
+  HERO_I++;
+  paintHero();
 }
 function showPrompt(){
   var p = el("dialprompt"); if (!p) return;
@@ -328,7 +346,7 @@ function startDial(){
    his ask; no greens, because the route line is green and the map needs to keep
    winning. Every one of these was checked against the ink and control colours —
    the worst case sits within 7% of the old warm white. */
-var PALETTE = ["#fdeef2","#fdecec","#fdf0e8","#faecf7","#f4ecfb","#eeeefb","#fdf6e3","#eaf3fb"];
+var PALETTE = ["#ffdce8","#ffd9d9","#ffe2cd","#ffe9c9","#fbd9f0","#eddcfb","#dfe2fc","#d3e9fb"];
 var CYCLE = 0;
 function applyCycle(n){
   CYCLE = n || 0;
@@ -338,6 +356,12 @@ function applyCycle(n){
   var r = parseInt(c.slice(1,3),16), g = parseInt(c.slice(3,5),16), b = parseInt(c.slice(5,7),16);
   document.documentElement.style.setProperty("--paper-soft",
     "rgba(" + r + "," + g + "," + b + ",.96)");
+  /* The dial buttons take a palette colour too, offset by three so it is
+     always clearly a DIFFERENT colour from today's background rather than the
+     neighbouring shade — and never the background itself, which would make the
+     buttons disappear into it. */
+  document.documentElement.style.setProperty("--btn",
+    PALETTE[(Math.abs(CYCLE) + 3) % PALETTE.length]);
   var m = document.querySelector('meta[name="theme-color"]');
   if (m) m.setAttribute("content", c);
 }
@@ -1776,9 +1800,36 @@ function basemapOverlays(map, d){
     layout:{ "icon-image":"pin-journal", "icon-size":pinSize, "icon-allow-overlap":true } });
 
   /* Everything on the map opens the thing it stands for. */
+  /* One popup at a time, and it remembers which pin it belongs to. Tapping a
+     pin shows the detail; tapping THE SAME pin again opens that day. Tapping a
+     different pin just moves the popup — otherwise the second tap becomes a
+     trapdoor wherever you happen to press next. */
+  var ARMED_PIN = null, POPUP = null;
   function popupAt(coord, html){
-    new maplibregl.Popup({ maxWidth:"250px", closeButton:true })
+    if (POPUP) { try { POPUP.remove(); } catch(e){} }
+    POPUP = new maplibregl.Popup({ maxWidth:"260px", closeButton:true, className:"rtpop" })
       .setLngLat(coord).setHTML(html).addTo(map);
+    POPUP.on("close", function(){ ARMED_PIN = null; });
+  }
+  /* Returns true when this is the second tap on the same pin. */
+  function pinTapped(key){
+    if (ARMED_PIN === key) { ARMED_PIN = null; return true; }
+    ARMED_PIN = key;
+    return false;
+  }
+  function dayLine(date){
+    var di = (d.day_index || {})[date];
+    var when = fmtDay(date);
+    return (di && di.day ? 'Day ' + di.day + ' &middot; ' : '') + when;
+  }
+  function dayPlace(date){
+    var di = (d.day_index || {})[date];
+    return di && di.place ? di.place : '';
+  }
+  function countOn(list, date){
+    var n = 0;
+    for (var i = 0; i < list.length; i++) if (list[i].date === date) n++;
+    return n;
   }
   map.on("click", "place-dots", function(e){
     var f = e.features[0];
@@ -1793,38 +1844,53 @@ function basemapOverlays(map, d){
   });
   map.on("click", "vstop-dots", function(e){
     var f = e.features[0], pr = f.properties;
+    // Derived stops carry no id, so the date and time identify the pin.
+    if (pinTapped("vs:" + pr.date + ":" + (pr.at || ""))) { loadDay(pr.date); return; }
     popupAt(f.geometry.coordinates,
       '<b>Car stopped here</b><br>' +
       '<span style="font-size:12px;color:#666">' +
       (pr.ongoing ? 'Still there' : (pr.mins ? 'For ' + (pr.mins >= 60
         ? Math.floor(pr.mins/60) + 'h ' + (pr.mins%60) + 'm' : pr.mins + ' min') : '')) +
       (pr.at ? ' &middot; ' + fmtTime(pr.at) : '') + '</span><br>' +
-      '<button class="ghostbtn" style="margin-top:6px" ' +
-        'onclick="loadDay(\''+esc(pr.date)+'\')">Open that day</button>');
+      '<div class="pophint">Tap the pin again to open the day &rarr;</div>');
   });
   map.on("click", "stop-dots", function(e){
     var f = e.features[0], pr = f.properties;
+    if (pinTapped("st:" + pr.id)) { loadDay(pr.date); return; }
     popupAt(f.geometry.coordinates,
-      '<b>'+(ICON[pr.kind]||"")+' '+esc(pr.place || pr.kind)+'</b><br>' +
-      '<button class="ghostbtn" style="margin-top:6px" ' +
-        'onclick="loadDay(\''+esc(pr.date)+'\')">Open that day</button>');
+      '<div class="popbody">' +
+        '<div class="popt">'+(ICON[pr.kind]||"")+' '+esc(pr.place || pr.kind)+'</div>' +
+        '<div class="popm">'+dayLine(pr.date)+
+          (pr.occurred_at ? ' &middot; '+fmtTime(pr.occurred_at) : '')+'</div>' +
+        (dayPlace(pr.date) ? '<div class="popm">'+esc(dayPlace(pr.date))+'</div>' : '') +
+        '<div class="pophint">Tap the pin again to open the day &rarr;</div>' +
+      '</div>');
   });
   map.on("click", "photo-pins", function(e){
     var f = e.features[0], pr = f.properties;
+    if (pinTapped("ph:" + pr.id)) { loadDay(pr.date); return; }
+    var n = countOn(d.photos || [], pr.date);
     popupAt(f.geometry.coordinates,
-      (pr.thumb ? '<img src="/photo/'+esc(pr.thumb)+'" style="width:100%;border-radius:8px" ' +
-        'onclick="loadDay(\''+esc(pr.date)+'\')">' : '') +
-      '<button class="ghostbtn" style="margin-top:6px" ' +
-        'onclick="loadDay(\''+esc(pr.date)+'\')">Open that day</button>');
+      (pr.thumb ? '<img src="/photo/'+esc(pr.thumb)+'" class="popimg">' : '') +
+      '<div class="popbody">' +
+        '<div class="popt">'+dayLine(pr.date)+'</div>' +
+        (dayPlace(pr.date) ? '<div class="popm">'+esc(dayPlace(pr.date))+'</div>' : '') +
+        '<div class="popm">'+(pr.author ? esc(pr.author)+' &middot; ' : '') +
+          fmtTime(pr.taken_at)+(n>1 ? ' &middot; '+n+' photos that day' : '')+'</div>' +
+        '<div class="pophint">Tap the pin again to open the day &rarr;</div>' +
+      '</div>');
   });
   map.on("click", "journal-pins", function(e){
     var f = e.features[0], pr = f.properties;
+    if (pinTapped("jn:" + pr.id)) { loadDay(pr.date); return; }
     popupAt(f.geometry.coordinates,
-      '<p style="margin:0;font-size:13px;line-height:1.4">'+esc(pr.excerpt)+
-      (pr.excerpt.length >= 120 ? '&hellip;' : '')+'</p>' +
-      '<p style="margin:4px 0 0;font-size:11px;color:#888">'+esc(pr.author)+'</p>' +
-      '<button class="ghostbtn" style="margin-top:6px" ' +
-        'onclick="loadDay(\''+esc(pr.date)+'\')">Open that day</button>');
+      '<div class="popbody">' +
+        '<div class="popt">'+dayLine(pr.date)+'</div>' +
+        (dayPlace(pr.date) ? '<div class="popm">'+esc(dayPlace(pr.date))+'</div>' : '') +
+        '<p class="popq">'+esc(pr.excerpt)+(pr.excerpt.length >= 120 ? '&hellip;' : '')+'</p>' +
+        '<div class="popm">'+esc(pr.author||'')+'</div>' +
+        '<div class="pophint">Tap the pin again to open the day &rarr;</div>' +
+      '</div>');
   });
   ["place-dots","place-labels","stop-dots","photo-pins","journal-pins","vstop-dots"].forEach(function(l){
     map.on("mouseenter", l, function(){ map.getCanvas().style.cursor = "pointer"; });

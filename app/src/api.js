@@ -446,8 +446,12 @@ export async function map(env, person) {
         WHERE lat IS NOT NULL AND dropped = 0 ORDER BY seq`).all(),
     // Located photos and journal entries: every event on the map, tappable.
     env.roadtrip.prepare(
-      `SELECT id, thumb_key, date, lat, lon FROM photo
-        WHERE lat IS NOT NULL AND lon IS NOT NULL ORDER BY taken_at`).all(),
+      // author and taken_at ride along so a map pin can say who took it and
+      // when, instead of offering a button that just opens the day.
+      `SELECT p.id, p.thumb_key, p.date, p.lat, p.lon, p.taken_at, p.tz_offset,
+              COALESCE(pe.name, '') AS author
+         FROM photo p LEFT JOIN person pe ON pe.id = p.author_id
+        WHERE p.lat IS NOT NULL AND p.lon IS NOT NULL ORDER BY p.taken_at`).all(),
     // Same share-flag read filter as journal(): a private entry's location
     // pin would leak the entry's existence to a viewer.
     env.roadtrip.prepare(
@@ -492,7 +496,27 @@ export async function map(env, person) {
     if (t.length > 1) tracks.push(t);
   }
 
+  // Small date -> {day, place} lookup for the map popups. Day number comes from
+  // the day table; the place is the derived visit for that date, i.e. where the
+  // car actually stopped, which is the same source the day screen uses.
+  const dayRows = await env.roadtrip.prepare(
+    `SELECT date, day_number FROM day ORDER BY date`).all();
+  // derivedVisits returns date -> Set(intention id), so the ids need resolving
+  // to names before they can be shown to anyone.
+  const [visits, intentNames] = await Promise.all([
+    derivedVisits(env),
+    env.roadtrip.prepare(`SELECT id, name FROM intention`).all(),
+  ]);
+  const nameOf = Object.fromEntries((intentNames.results || []).map((i) => [i.id, i.name]));
+  const dayIndex = {};
+  for (const d of dayRows.results || []) dayIndex[d.date] = { day: d.day_number, place: null };
+  for (const date of Object.keys(visits || {})) {
+    const ids = Array.from(visits[date] || []);
+    if (dayIndex[date] && ids.length) dayIndex[date].place = nameOf[ids[0]] || null;
+  }
+
   return json({
+    day_index: dayIndex,
     tracks,
     stops: stops.results,
     current: last || null,
