@@ -67,12 +67,24 @@ export const SHELL = String.raw`<!DOCTYPE html>
      path, same rule as the map tiles. */
   @font-face{font-family:'Bling';src:url('/font/title.woff2') format('woff2');
     font-weight:400;font-style:normal;font-display:swap}
-  .dial{position:relative;width:min(96vw,384px);aspect-ratio:1;margin:16px auto 4px}
+  /* min(100%,384px), NOT min(96vw,384px). 96vw is measured against the
+     VIEWPORT and .screen carries 18px of padding each side, so on a 390px
+     phone the dial came out 374px inside a 354px content box — 20px too wide.
+     Auto margins resolve to ZERO when there is no free space, so instead of
+     centring, the box pinned to the left edge of the content box and spilled
+     20px past the right padding, right off the viewport (scrollWidth 392 on a
+     390 screen). It has been off-centre since the dial shipped; what made it
+     visible was the alert banner, which is correctly inset and gave the eye a
+     straight edge to measure against for the first time.
+     Costs ~20px of diameter and buys alignment with every card, the banner and
+     the caption — one gutter down the whole screen. Buttons stay 67px, well
+     over the 44px tap floor. */
+  .dial{position:relative;width:min(100%,384px);aspect-ratio:1;margin:16px auto 4px}
   /* aspect-ratio needs Safari 15. Without these the dial gets width and NO
      height, taking the six record buttons and the photo down with it — the
      whole capture surface would simply not be there. */
   @supports not (aspect-ratio: 1){
-    .dial{height:0;padding-bottom:min(96vw,384px)}
+    .dial{height:0;padding-bottom:min(100%,384px)}
     .dialbtn{height:auto;padding:14px 0}
     .dialcentre{height:0;padding-bottom:98%}
     .parkposter img{height:150px}
