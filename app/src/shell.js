@@ -68,24 +68,34 @@ export const SHELL = String.raw`<!DOCTYPE html>
   @font-face{font-family:'Bling';src:url('/font/title.woff2') format('woff2');
     font-weight:400;font-style:normal;font-display:swap}
   .dial{position:relative;width:min(92vw,360px);aspect-ratio:1;margin:16px auto 4px}
-  .dialbtn{position:absolute;transform:translate(-50%,-50%);width:25%;aspect-ratio:1;
-    border-radius:50%;border:1px solid var(--line);background:var(--card);
-    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-    font:inherit;cursor:pointer;box-shadow:0 3px 10px rgba(80,60,30,.13);
+  /* Buttons sit ON the picture, small, around its edge — the photo is the
+     ground rather than a hole in the middle of a ring. z-index over the
+     scrim so a dark shot never swallows one. */
+  .dialbtn{position:absolute;z-index:3;transform:translate(-50%,-50%);width:19%;aspect-ratio:1;
+    border-radius:50%;border:1px solid rgba(255,255,255,.85);background:var(--card);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+    font:inherit;cursor:pointer;box-shadow:0 3px 12px rgba(20,12,6,.42);
     transition:transform .13s ease, box-shadow .13s ease}
-  .dialbtn .ic{font-size:26px;line-height:1}
-  .dialbtn .lb{font-size:11px;font-weight:660;color:var(--ink);letter-spacing:-.2px}
-  .dialbtn:active{transform:translate(-50%,-50%) scale(.93)}
-  .dialbtn.lit{box-shadow:0 0 0 3px var(--sun), 0 4px 14px rgba(200,98,31,.34)}
-  .dialcentre{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-    width:40%;aspect-ratio:1;border-radius:50%;overflow:hidden;cursor:pointer;
-    background:var(--tap);box-shadow:0 4px 16px rgba(60,40,20,.24)}
+  .dialbtn .ic{font-size:21px;line-height:1}
+  .dialbtn .lb{font-size:9.5px;font-weight:700;color:var(--ink);letter-spacing:-.2px}
+  .dialbtn:active{transform:translate(-50%,-50%) scale(.92)}
+  .dialbtn.lit{box-shadow:0 0 0 3px var(--sun), 0 5px 16px rgba(200,98,31,.45)}
+  .dialcentre{position:absolute;z-index:1;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:82%;aspect-ratio:1;border-radius:50%;overflow:hidden;cursor:pointer;
+    background:var(--tap);box-shadow:0 5px 20px rgba(60,40,20,.26)}
   .dialcentre img{width:100%;height:100%;object-fit:cover;display:block}
-  .dialscrim{position:absolute;inset:0;
-    background:linear-gradient(to top,rgba(20,12,6,.86) 0%,rgba(20,12,6,.55) 46%,rgba(20,12,6,.12) 100%)}
-  .dialprompt{position:absolute;left:0;right:0;bottom:0;padding:0 11px 13px;
-    color:#fff;font-size:12px;font-weight:660;line-height:1.28;text-align:center;
-    text-shadow:0 1px 3px rgba(0,0,0,.6)}
+  /* Darkest where the words are, clearing toward the rim so the picture still
+     reads as a picture. */
+  .dialscrim{position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,
+    rgba(20,12,6,.74) 0%, rgba(20,12,6,.66) 34%, rgba(20,12,6,.30) 66%, rgba(20,12,6,.10) 100%)}
+  .dialprompt{position:absolute;z-index:2;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:52%;color:#fff;font-size:13px;font-weight:700;line-height:1.3;text-align:center;
+    text-shadow:0 1px 4px rgba(0,0,0,.75);pointer-events:none}
+  /* Swings around to whichever button the sentence is talking about. */
+  .dialarrow{position:absolute;z-index:2;color:#fff;font-size:23px;line-height:1;
+    text-shadow:0 1px 5px rgba(0,0,0,.95), 0 0 12px rgba(0,0,0,.7);pointer-events:none;
+    transition:left .5s cubic-bezier(.34,1.25,.5,1), top .5s cubic-bezier(.34,1.25,.5,1),
+               transform .5s cubic-bezier(.34,1.25,.5,1)}
   .parkwall{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:11px;margin-bottom:11px}
   .parkposter{margin:0;background:var(--card);border:1px solid var(--line);border-radius:12px;
     overflow:hidden;box-shadow:0 2px 8px rgba(80,60,30,.10)}
@@ -243,11 +253,26 @@ function openHero(){
 }
 function showPrompt(){
   var p = el("dialprompt"); if (!p) return;
-  var k = DIAL_KINDS[Math.abs(DIAL_I) % DIAL_KINDS.length];
+  var i = Math.abs(DIAL_I) % DIAL_KINDS.length, k = DIAL_KINDS[i];
   p.innerHTML = PROMPT[k] || "";
   DIAL_KINDS.forEach(function(x){
     var b = el("dial-"+x); if (b) b.className = "dialbtn" + (x === k ? " lit" : "");
   });
+  /* The arrow rides the same ring the buttons do, at a smaller radius, and
+     rotates to point outward at the one being described. The glyph points east
+     at 0deg, which is where the angle maths starts too, so the rotation is the
+     angle itself with nothing to correct. */
+  var arrow = el("dialarrow");
+  if (arrow) {
+    // 21%, not 27%: the buttons sit at 36% with a 9.5% radius, so their inner
+    // edge is at 26.5% and an arrow at 27% is drawn UNDERNEATH the very button
+    // it is pointing at. At 21% it sits in clear air between the words and the
+    // button, and clears the text block at all six angles.
+    var deg = -90 + i*60, a = deg * Math.PI/180, R = 21;
+    arrow.style.left = (50 + R*Math.cos(a)).toFixed(2) + "%";
+    arrow.style.top  = (50 + R*Math.sin(a)).toFixed(2) + "%";
+    arrow.style.transform = "translate(-50%,-50%) rotate(" + deg + "deg)";
+  }
 }
 function promptFor(k){
   var i = DIAL_KINDS.indexOf(k);
@@ -506,12 +531,13 @@ function loadToday(){
           '<div class="dialcentre" id="dialcentre" onclick="openHero()">' +
             '<img id="dialphoto" alt="">' +
             '<div class="dialscrim"></div>' +
-            '<div class="dialprompt" id="dialprompt"></div>' +
           '</div>' +
+          '<div class="dialprompt" id="dialprompt"></div>' +
+          '<span class="dialarrow" id="dialarrow">&#10148;</span>' +
           kinds.map(function(k,i){
             var act = k === "journal" ? "openJot()" : "saveStop(\'"+k+"\')";
             var ic = k === "journal" ? "&#9997;" : ICON[k];
-            var a = (-90 + i*60) * Math.PI/180, R = 35.5;
+            var a = (-90 + i*60) * Math.PI/180, R = 36;
             var x = (50 + R*Math.cos(a)).toFixed(2), y = (50 + R*Math.sin(a)).toFixed(2);
             return '<button class="dialbtn" id="dial-'+k+'" style="left:'+x+'%;top:'+y+'%" ' +
               'onclick="'+act+'" ontouchstart="promptFor(\''+k+'\')" ' +
