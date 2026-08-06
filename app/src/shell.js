@@ -55,7 +55,7 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .stat span{display:block;font-size:25px;font-weight:640;letter-spacing:-.5px;line-height:1.1}
   .stat small{color:var(--ink-3);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
   .stat .qual{color:var(--ink-3);font-size:10.5px;letter-spacing:0;text-transform:none;display:block;margin-top:1px}
-  .actionbar{position:fixed;left:0;right:0;bottom:var(--nav-h);padding:12px 18px 14px;
+  .actionbar{position:fixed;left:0;right:0;bottom:calc(var(--nav-h) + var(--safe-bot));padding:12px 18px 14px;
     background:linear-gradient(to top,var(--paper) 62%,rgba(251,249,246,0));z-index:40;max-width:640px;margin:0 auto}
   .bigbtn{display:block;width:100%;border:0;border-radius:16px;background:var(--sun);color:#fff;
     font:inherit;font-size:17.5px;font-weight:660;padding:19px;cursor:pointer;box-shadow:0 5px 16px rgba(200,98,31,.32)}
@@ -142,7 +142,7 @@ var ME = null, POS = null;
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
-/* Her notes are full of links she found. Split the RAW text on URLs and escape
+/* Notes are full of links they found. Split the RAW text on URLs and escape
    each piece separately — never regex over already-escaped text, which is how
    the earlier stored-XSS hole opened (an id flowed into an attribute unescaped).
    Only https?:// can match, so no javascript: URL can survive this. */
@@ -664,7 +664,7 @@ function loadTrip(){
         i.activities+' to see'+(i.booked?' &middot; booked':'')+'</p></div></div>';
     }).join("");
 
-    el("s-trip").innerHTML = '<h1>The trip</h1><p class="sub">'+d.days.length+
+    el("s-trip").innerHTML = '<h1>The Trip</h1><p class="sub">'+d.days.length+
       ' day'+(d.days.length===1?"":"s")+' so far</p>' +
       '<div class="maparea" id="trip-map" style="height:210px;margin-bottom:6px"></div>' +
       '<p class="tiny" style="margin:0 0 4px">Tap the map to open it full size.</p>' +
@@ -1199,7 +1199,6 @@ function loadPlaces(){
     var visited = d.places.filter(function(p){ return p.visited; }).length;
     el("s-places").innerHTML = '<h1>Itinerary</h1><p class="sub">'+d.places.length+
       ' places &middot; '+visited+' reached so far</p>' +
-      '<p class="tiny" style="margin:-10px 0 14px">Lily\'s plan, in her order. Nothing here is ever late.</p>' +
       d.places.map(function(p){
       return '<div class="day" onclick="loadPlace(\''+p.id+'\')">' +
         '<div style="flex:1"><div class="row"><b'+(p.visited?'':' style="opacity:.62"')+'>'+esc(p.name)+
@@ -1253,7 +1252,7 @@ function loadPlace(id, from){
          activity (italic, small, accent-coloured). Her place notes run to
          ~800 characters and up to 3,800; the same styling makes a wall.
          Left rule in the accent colour says "hers"; the body reads as body. */
-      (i.notes ? '<h2>Her notes</h2><div class="card" style="border-left:3px solid var(--sun)">' +
+      (i.notes ? '<h2>Notes</h2><div class="card" style="border-left:3px solid var(--sun)">' +
         '<p style="margin:0;color:var(--ink-2);font-size:14.5px;line-height:1.6;' +
         'white-space:pre-wrap;word-break:break-word">' +
         linkify(i.notes)+'</p></div>' : '') +
@@ -1284,7 +1283,7 @@ function loadRes(id, from){
       '<button class="back" onclick="'+RES_BACK+'">&larr;</button>' +
       '<h1>'+esc(r.name)+'</h1><p class="sub">'+esc(r.place_name||"")+'</p>' +
       '<div class="card" style="padding:4px 14px">'+kv+'</div>' +
-      (r.notes ? '<h2>Her notes</h2><div class="card"><p class="hers" style="margin:0;font-size:14.5px;line-height:1.5">'+
+      (r.notes ? '<h2>Notes</h2><div class="card"><p class="hers" style="margin:0;font-size:14.5px;line-height:1.5">'+
         esc(r.notes)+'</p></div>' : '') +
       '<div class="actionbar">' +
         (r.url ? '<a class="ghostbtn" href="'+esc(r.url)+'" target="_blank" rel="noopener">Booking page</a>' : '') +
@@ -1333,7 +1332,15 @@ function mapSvg(d, arcs, W, H){
     for (var i=0;i<a.length;i++) dd += (i?"L":"M")+px(a[i][0]).toFixed(1)+" "+py(a[i][1]).toFixed(1);
     return '<path d="'+dd+'" fill="none" stroke="#d3ddd6" stroke-width="1" vector-effect="non-scaling-stroke"/>';
   }).join("");
-  var route = pts.map(function(p,i){ return (i?"L":"M")+px(p[0]).toFixed(1)+" "+py(p[1]).toFixed(1); }).join(" ");
+  /* One subpath PER SEGMENT. Flattening every track into a single path drew a
+     straight chord from the end of each segment to the start of the next —
+     invisible while segments were consecutive, but map() appends the
+     breadcrumb-derived tracks after the polyline ones, so the join between the
+     two groups leapt from North Dakota back to Ohio across the whole map. */
+  var route = (d.tracks||[]).map(function(t){
+    return t.map(function(p,i){
+      return (i?"L":"M")+px(p[0]).toFixed(1)+" "+py(p[1]).toFixed(1); }).join(" ");
+  }).filter(function(x){ return x; }).join(" ");
   var pins = (d.stops||[]).map(function(st){
     return '<circle cx="'+px(st.lon).toFixed(1)+'" cy="'+py(st.lat).toFixed(1)+
            '" r="3.5" data-r="3.5" fill="#c8621f" stroke="#fff" stroke-width="1" vector-effect="non-scaling-stroke"/>'; }).join("");
