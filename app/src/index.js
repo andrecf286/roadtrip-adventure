@@ -9,6 +9,7 @@
 import { currentPerson, mintToken, readToken, sessionCookie } from "./auth.js";
 import { SHELL } from "./shell.js";
 import * as api from "./api.js";
+import { TITLE_FONT_B64 } from "./font_title.js";
 import { STATE_ARCS } from "./geo.js";
 import { STATE_ARCS_FINE } from "./geo_fine.js";
 
@@ -75,6 +76,14 @@ export default {
       });
     }
 
+    // The title face. Public (no session gate) because it is a font, and
+    // immutable because the bytes never change under this URL.
+    if (path === "/font/title.woff2") {
+      const bin = Uint8Array.from(atob(TITLE_FONT_B64), (c) => c.charCodeAt(0));
+      return new Response(bin, { headers: {
+        "content-type": "font/woff2",
+        "cache-control": "public, max-age=31536000, immutable" } });
+    }
     if (path === "/geo/states.json") {
       return new Response(JSON.stringify(STATE_ARCS), {
         headers: {

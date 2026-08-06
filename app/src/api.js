@@ -203,6 +203,16 @@ export async function today(env) {
   const dayNumber = day?.day_number
     ?? Math.floor((new Date(date) - new Date(meta.departure_date)) / 86400000) + 1;
 
+  const vstops = await vehicleStops(env);
+  const stopCount = vstops.length;
+
+  // Recent-weighted rather than uniform: a picture from this morning pulls
+  // harder than one from day one. Newest 40, twelve of them, rotated hourly
+  // by the client.
+  const heroShots = await env.roadtrip.prepare(
+    `SELECT id, thumb_key, r2_key, date FROM photo
+      ORDER BY taken_at DESC LIMIT 40`).all();
+
   return json({
     date,
     day_number: dayNumber,
@@ -221,6 +231,15 @@ export async function today(env) {
     planned_tonight: actual ? (next || null) : null,
     last_stop: lastStop || null,
     town,
+    // The look of the app cycles ON EVERY VEHICLE STOP — background colour and
+    // whose name comes first. Andy's reasoning: they should notice the app has
+    // changed at the exact moment they get out of the car, because that is when
+    // there is something to record. Derived, never stored, and stable between
+    // stops so nothing flickers while they are looking at it.
+    cycle: stopCount,
+    // A dozen photos for the Today centrepiece to rotate through. Sent with
+    // Today so the screen costs one request, not two.
+    hero: heroShots.results.map((h) => ({ id: h.id, thumb: h.thumb_key || h.r2_key, key: h.r2_key, date: h.date })),
   });
 }
 
@@ -710,7 +729,7 @@ export async function uploadPhoto(env, person, request) {
     these are pictures of two teenagers' trip, never public URLs. */
 export async function servePhoto(env, path) {
   const key = path.replace(/^\/photo\//, "");
-  if (!/^(photos|thumbs|badges)\//.test(key)) return json({ error: "bad key" }, 400);
+  if (!/^(photos|thumbs|badges|parkbadges)\//.test(key)) return json({ error: "bad key" }, 400);
   const obj = await env.PHOTOS.get(key);
   if (!obj) return json({ error: "not found" }, 404);
   return new Response(obj.body, {
@@ -831,6 +850,11 @@ function stateShape(name) {
 let STATES_CACHE = null;
 
 export async function badges(env) {
+  // One tiny table read; thirteen rows at most, and it means adding a park's
+  // artwork is an INSERT rather than a deploy.
+  const artRows = await env.roadtrip.prepare(
+    `SELECT park_name, r2_key FROM park_badge`).all();
+  const parkArt = Object.fromEntries((artRows.results || []).map((r) => [r.park_name, r.r2_key]));
   const [trips, points, parks, mileage, fills, bespoke] = await Promise.all([
     env.roadtrip.prepare(
       `SELECT t.gps, t.start_time, t.time_zone
@@ -892,7 +916,7 @@ export async function badges(env) {
   const miles = Math.round(((mileage?.miles ?? 0) + await liveExtraMiles(env)) * 10) / 10;
   return json({
     states: STATES_CACHE.states,
-    parks: parks.results,
+    parks: parks.results.map((p) => ({ ...p, image_key: parkArt[p.name] || null })),
     miles: { total: miles, earned: Math.floor(miles / 1000),
              to_next: Math.round(1000 - (miles % 1000)) },
     tanks: { fills: fills?.n ?? 0, earned: Math.floor((fills?.n ?? 0) / 10) },
