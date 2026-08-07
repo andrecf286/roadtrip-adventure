@@ -370,8 +370,25 @@ function offlineInto(id, retry){
 function send(u,m,b){ return fetch(u,{method:m,credentials:"same-origin",
   headers:{"content-type":"application/json"},body:JSON.stringify(b)}).then(function(r){ return r.json(); }); }
 
+/* "8h", "8h 20m", "45 min". Nobody wants 485 minutes. */
+function hoursish(mins){
+  if (mins == null) return "";
+  if (mins < 60) return mins + " min";
+  var h = Math.floor(mins/60), m = mins % 60;
+  return h + "h" + (m ? " " + m + "m" : "");
+}
 function fmtTime(iso){ if(!iso) return ""; var d=new Date(iso);
   return d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}); }
+/* "August 7th". toLocaleDateString has no ordinal, and Andy asked for one by
+   writing the header out longhand. 11th/12th/13th are the exceptions every
+   naive implementation gets wrong. */
+function fmtLong(ds){
+  if (!ds) return "";
+  var d = new Date(ds+"T12:00:00"), n = d.getDate();
+  var suf = (n % 100 >= 11 && n % 100 <= 13) ? "th"
+    : ["th","st","nd","rd"][n % 10] || "th";
+  return d.toLocaleDateString([], { month:"long" }) + " " + n + suf;
+}
 function fmtDay(ds){ if(!ds) return ""; var d=new Date(ds+"T12:00:00");
   return d.toLocaleDateString([], {weekday:"long", month:"long", day:"numeric"}); }
 function fmtShort(ds){ if(!ds) return ""; var d=new Date(ds+"T12:00:00");
@@ -801,17 +818,28 @@ function loadToday(){
        day, town, miles today, moving or parked. The temperature belongs with
        those and not with the cumulative totals underneath. */
     var w = d.weather ? wx(d.weather.code, d.weather.is_day) : null;
-    var l1 = 'Day '+d.day_number +
-      (d.town ? ' &middot; '+esc(d.town) : '') +
-      ' &middot; '+(d.miles_today||0)+' mi today &middot; ' + state +
+    /* "Day 6, August 7th, Forsyth, MT" — Andy's wording. The heading answers
+       WHEN and WHERE in one breath and the numbers move below it, which also
+       stops the old single line from wrapping to two on every phone. */
+    var l1 = 'Day '+d.day_number + ', ' + fmtLong(d.date) +
+      (d.town ? ', '+esc(d.town) : '');
+    var l1b = (d.miles_today||0)+' mi today &middot; ' + state +
       (w ? ' &middot; '+w.icon+' '+degF(d.weather.temp_f) : '');
-    /* Fuel goes right after mpg, per Andy. Suppressed past six hours: Bouncie
-       reports a level on its own cadence, and a stale percentage on a screen
-       that says "Parked" reads as current when it is not — worse than absent. */
+    /* Fuel goes right after mpg, per Andy. It used to be SUPPRESSED past six
+       hours, on the theory that a stale percentage beside the word "Parked"
+       reads as current. True, but the cure was worse: Bouncie only reports a
+       level while the engine is running, so the gauge blanked itself every
+       single night and was missing every morning — which is exactly when
+       somebody opens the app. Four gaps over six hours in the first five days,
+       the longest fourteen. Qualify it instead of hiding it: an overnight
+       reading still tells you what is in the tank, and the timestamp makes it
+       honest rather than absent. */
     var fuelBit = "";
-    if (d.fuel && d.fuel.level != null &&
-        Date.now() - new Date(d.fuel.at).getTime() < 6*3600000) {
-      fuelBit = ' &middot; &#9981; '+Math.round(d.fuel.level)+'% fuel';
+    if (d.fuel && d.fuel.level != null) {
+      var fuelAge = Date.now() - new Date(d.fuel.at).getTime();
+      fuelBit = ' &middot; &#9981; '+Math.round(d.fuel.level)+'% fuel' +
+        (fuelAge > 90*60000
+          ? '<span style="opacity:.6"> at '+fmtTime(d.fuel.at)+'</span>' : '');
     }
     var l2 = (d.miles_total||0).toLocaleString()+' mi total &middot; ' +
       (d.mpg ? d.mpg.value+' mpg' : 'mpg after two fills') + fuelBit;
@@ -900,11 +928,24 @@ function loadToday(){
         '<div class="tiny wxmore">Tap for what it says</div></div>';
     }).join("");
 
+    /* Last night. Nobody taps a campsite button — five days and zero taps said
+       so — but the car sat still for eight hours somewhere, and that is the
+       record. Sits under the dial, before tonight's plan, so the screen reads
+       in order: where they woke, where they are, where they are going. */
+    var lastNight = "";
+    if (d.last_night && d.last_night.place) {
+      var ln = d.last_night;
+      lastNight = '<div class="card" style="margin-top:10px"><div class="row">' +
+        '<span><span style="opacity:.6">Last night &middot; </span><b>'+esc(ln.place)+'</b></span>' +
+        (ln.mins ? '<span class="tiny">'+hoursish(ln.mins)+'</span>' : '') + '</div></div>';
+    }
+
     el("s-today").innerHTML = alerts +
       '<div class="blingwrap"><h1 class="blingtitle">'+tripTitle()+'</h1></div>' +
       '<h1 style="font-size:19px;line-height:1.35">'+l1+'</h1>' +
+      '<p class="sub" style="margin-bottom:2px">'+l1b+'</p>' +
       '<p class="sub">'+l2+'</p>' +
-      undo + grid + tonight + last;
+      undo + grid + lastNight + tonight + last;
     if (el("dial")) {
       paintHero();
       /* Cycles for all six. On a viewer's dial the prompt and the lit ring are
@@ -1183,6 +1224,9 @@ function loadTrip(){
       });
       if (sl.length > 4) bits.push("+" + (sl.length - 4) + " more");
       if (x.photos) bits.push(x.photos + " photo" + (x.photos===1?"":"s"));
+      // The night that ENDED this day, on the day it began — so the row reads
+      // "…and then they slept at Medora campground."
+      if (x.slept && x.slept.place) bits.push("&#127957; " + esc(x.slept.place));
       return '<div class="day" onclick="loadDay(\'' + x.date + '\',\'trip\')">' +
         '<div class="daynum"><b>'+x.day_number+'</b><small>'+fmtShort(x.date)+'</small></div>' +
         '<div style="flex:1"><div class="row"><b>'+esc(x.title||(x.places?x.places:"On the road"))+
@@ -1316,6 +1360,15 @@ function loadDay(date, from){
         '<button class="ghostbtn" onclick="' +
         (canWrite() ? 'saveJournal(\''+date+'\')' : 'deny(\'journal\',event)') +
         '">Save entry</button></div>' +
+      (d.slept && d.slept.place
+        ? '<h2>The night</h2><div class="card"><div class="row">' +
+          '<span>&#127957; <b>'+esc(d.slept.place)+'</b></span>' +
+          '<span class="tiny">'+(d.slept.ongoing ? 'still there'
+            : (d.slept.mins ? hoursish(d.slept.mins) : ''))+'</span></div>' +
+          (d.slept.source === "town"
+            ? '<p class="tiny" style="margin:6px 0 0">Where the car spent the night &mdash; ' +
+              'nothing booked here.</p>' : '') + '</div>'
+        : '') +
       '<h2>Stops</h2>' + stops;
   });
 }

@@ -127,6 +127,127 @@ async function tripMeta(env) {
 
 import { currentAt, alertsAt, archiveAt, attachToStop } from "./weather.js";
 
+/* ------------------------------------------------------------- nights slept */
+/**
+ * Where they slept, derived — never asked for.
+ *
+ * There are zero recorded campsite stops in this trip and there are not going
+ * to be any: the girls do not tap chore-shaped buttons, which five days of data
+ * said plainly enough. The same answer that solved photographs solves this. The
+ * car has been telling us where they slept every night since the 2nd — an
+ * eight-hour parked gap at one coordinate is the least ambiguous signal in the
+ * whole dataset, and it was the one kind of stop nothing interpreted.
+ *
+ * A stay used to be visible only WHILE it was happening: v_tonight labels a
+ * reservation "tonight" until its check-out date, then it silently becomes
+ * "past" and leaves no trace on any screen. Medora was booked, confirmed, slept
+ * in for two nights, and by Thursday morning the app had forgotten it. This is
+ * what remembers.
+ *
+ * Returns { 'YYYY-MM-DD': {place, mins, lat, lon, source} } keyed by the date
+ * the night STARTED — the night of the 5th is the one you wake from on the 6th.
+ */
+async function nightsSlept(env) {
+  const [vstops, res, intents] = await Promise.all([
+    vehicleStops(env),
+    env.roadtrip.prepare(
+      `SELECT r.name, r.check_in_date, r.check_out_date, r.booked, i.lat, i.lon
+         FROM reservation r LEFT JOIN intention i ON i.id = r.intention_id
+        WHERE r.check_in_date IS NOT NULL`).all(),
+    env.roadtrip.prepare(
+      `SELECT name, lat, lon FROM intention WHERE lat IS NOT NULL AND dropped = 0`).all(),
+  ]);
+
+  const MIN_MINS = 180;                 // three hours; a long dinner is not a night
+  const nights = {};
+  for (const s of vstops) {
+    const startMs = new Date(s.at).getTime();
+    const endMs = s.until ? new Date(s.until).getTime() : Date.now();
+    const mins = Math.round((endMs - startMs) / 60000);
+    if (mins < MIN_MINS) continue;
+
+    const dStart = localDate(s.at, s.tz);
+    const dEnd = localDate(new Date(endMs).toISOString(), s.tz);
+    let night = null;
+    // Parked through a local midnight: the night belongs to the day it began.
+    if (dEnd !== dStart) night = dStart;
+    // Or rolled in after midnight — 2am arrivals belong to the night before.
+    else if (Number(localHour(s.at, s.tz)) < 6) night = prevDate(dStart);
+    if (!night) continue;
+
+    const prev = nights[night];
+    if (!prev || mins > prev.mins) {
+      nights[night] = { mins, lat: s.lat, lon: s.lon, at: s.at, ongoing: s.ongoing };
+    }
+  }
+
+  const near = (lat, lon, alat, alon, mi) => {
+    if (alat == null || alon == null) return false;
+    const cos2 = Math.cos((lat * Math.PI) / 180) ** 2;
+    return (alat - lat) * (alat - lat) * 4761 +
+           (alon - lon) * (alon - lon) * 4761 * cos2 <= mi * mi;
+  };
+
+  for (const [night, n] of Object.entries(nights)) {
+    /* Name it from the plan when the plan agrees, and only then. A booked
+       reservation covering that night whose place is where the car actually sat
+       is the strongest claim available — that is how "Medora campground" gets
+       its credit without anybody tapping anything. A reservation with no
+       coordinates is accepted on dates alone; one whose place is fifty miles
+       away is not, because then they slept somewhere else and the plan is the
+       thing that was wrong. */
+    let named = null;
+    for (const r of res.results) {
+      if (!r.booked) continue;
+      const out = r.check_out_date || r.check_in_date;
+      const covers = r.check_in_date <= night && night < out;
+      const sameDay = r.check_in_date === night;
+      if (!(covers || sameDay)) continue;
+      if (r.lat != null && !near(n.lat, n.lon, r.lat, r.lon, 25)) continue;
+      named = { place: r.name, source: "reservation" };
+      break;
+    }
+    if (!named) {
+      for (const i of intents.results) {
+        if (near(n.lat, n.lon, i.lat, i.lon, 25)) { named = { place: i.name, source: "intention" }; break; }
+      }
+    }
+    if (!named) {
+      const t = nearestTown(n.lat, n.lon);
+      named = t ? { place: "near " + t, source: "town" } : { place: null, source: null };
+    }
+    n.place = named.place;
+    n.source = named.source;
+  }
+  return nights;
+}
+
+/* Local hour-of-day at an instant, given a "-0600"-style offset. */
+function localHour(iso, tzOffset) {
+  const sign = (tzOffset || "-0500").startsWith("-") ? -1 : 1;
+  const mins = sign * (parseInt((tzOffset || "-0500").slice(1, 3), 10) * 60 +
+                       parseInt((tzOffset || "-0500").slice(3, 5), 10));
+  return new Date(new Date(iso).getTime() + mins * 60000).getUTCHours();
+}
+function prevDate(d) {
+  const t = new Date(d + "T12:00:00Z").getTime() - 86400000;
+  return new Date(t).toISOString().slice(0, 10);
+}
+/* Biggest town within 8 miles, else the nearest one at all. Same corridor table
+   and the same preference the Today header uses, so "near Medora, ND" on the
+   Day screen and "Medora, ND" in the header can never disagree. */
+function nearestTown(lat, lon) {
+  const cos2 = Math.cos((lat * Math.PI) / 180) ** 2;
+  let best = null, bestD2 = Infinity, bigBest = null, bigPop = 0;
+  for (const [name, st, tlat, tlon, pop] of CORRIDOR_TOWNS) {
+    const d2 = (tlat - lat) * (tlat - lat) * 4761 + (tlon - lon) * (tlon - lon) * 4761 * cos2;
+    if (d2 < bestD2) { bestD2 = d2; best = { name, st }; }
+    if (d2 <= 64 && pop > bigPop) { bigPop = pop; bigBest = { name, st }; }
+  }
+  const pick = bigBest || best;
+  return pick && (bigBest || bestD2 <= 40 * 40) ? pick.name + ", " + pick.st : null;
+}
+
 /* ------------------------------------------------------------------ today */
 
 export async function today(env) {
@@ -155,6 +276,7 @@ export async function today(env) {
 
   /* Both fail soft to null / [] and both are cached at the edge, so this adds
      no upstream call on the overwhelming majority of Today pulls. */
+  const nights = await nightsSlept(env);
   const [weatherNow, weatherAlerts] = await Promise.all([
     currentAt(last?.lat ?? null, last?.lon ?? null),
     alertsAt(last?.lat ?? null, last?.lon ?? null),
@@ -276,6 +398,12 @@ export async function today(env) {
     moving,
     speed: moving ? Math.round(last.speed) : null,
     fuel: fuel ? { level: fuel.fuel_level, at: fuel.ts } : null,
+    /* Last night, derived from where the car actually sat. Keyed by the night
+       it began, so on the morning of the 7th this is the night of the 6th. */
+    last_night: (() => {
+      const k = prevDate(date), n = nights[k];
+      return n && n.place ? { date: k, place: n.place, mins: n.mins, source: n.source } : null;
+    })(),
     /* Live, where the car is. Deliberately NOT stored anywhere: nobody will
        want to know in October what the dashboard said at 3pm on a Tuesday.
        The readings that get kept are the ones frozen onto stops. */
@@ -375,6 +503,12 @@ export async function trip(env) {
       ORDER BY i.seq`).all();
   for (const r of placeRows.results) r.visited = everVisited.has(r.id) ? 1 : 0;
 
+  const nights = await nightsSlept(env);
+  for (const d of days.results) {
+    const n = nights[d.date];
+    d.slept = n && n.place ? { place: n.place, mins: n.mins, source: n.source } : null;
+  }
+
   return json({
     departure: meta.departure_date,
     today: today_,
@@ -422,9 +556,17 @@ export async function day(env, date, person) {
       .bind(...dayVisits).all()).results;
   }
 
+  const nights = await nightsSlept(env);
+  const slept = nights[date];
+
   return json({
     date,
     summary: summary || null,
+    // Where they slept at the end of THIS day. Null is a real answer — the
+    // first night of the trip has one, a day still in progress does not.
+    slept: slept && slept.place
+      ? { place: slept.place, mins: slept.mins, source: slept.source, ongoing: !!slept.ongoing }
+      : null,
     stops: stops.results,
     photos: photos.results,
     journal: journal.results,
@@ -654,6 +796,11 @@ async function vehicleStops(env) {
     if (lat == null) continue;
     stops.push({
       at: t.end_time,
+      // When the car moved again. Needed to tell a lunch stop from a night:
+      // the question is not how long they were parked but whether they were
+      // parked THROUGH a local midnight.
+      until: nextStart,
+      tz: t.time_zone || "-0500",
       date: localDate(t.end_time, t.time_zone || "-0500"),
       lat, lon,
       mins: nextStart ? mins : null, // null = still there
