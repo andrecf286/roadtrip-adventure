@@ -401,6 +401,29 @@ function todayISO(){
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") +
     "-" + String(d.getDate()).padStart(2,"0");
 }
+/* Two clocks for the Today heading: where the car is, and Ohio. Everybody
+   sees the same line — "their time and our time" means one thing at dinner
+   in Forsyth and one thing at a kitchen table in Ohio, and now both are on
+   it. The car's zone comes off its own breadcrumbs (tz_offset in the Today
+   payload); Ohio is Ohio, DST and all, via the browser's own zone tables. */
+function fmtClock(dt){
+  var h = dt.getUTCHours(), m = dt.getUTCMinutes();
+  var ap = h < 12 ? "a" : "p"; h = h % 12 || 12;
+  return h + ":" + (m < 10 ? "0" : "") + m + ap;
+}
+function clocksLine(off){
+  var m = /^([+-])(\d{2}):?(\d{2})$/.exec(off || "-0500");
+  var mins = m ? (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) : -300;
+  var car = fmtClock(new Date(Date.now() + mins * 60000));
+  var oh;
+  try {
+    oh = new Date().toLocaleTimeString("en-US",
+      { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })
+      .replace(" AM", "a").replace(" PM", "p");
+  } catch (e) { oh = fmtClock(new Date(Date.now() - 240 * 60000)); }
+  return car + " &middot; " + oh + " Ohio";
+}
+var TODAY_TZ = "-0500";
 function mapsLinks(lat, lon, name, drive){
   if (lat == null || lon == null) return "";
   var ll = Number(lat).toFixed(5) + "," + Number(lon).toFixed(5);
@@ -695,6 +718,13 @@ setInterval(function(){
 setInterval(checkVersion, 8 * 60 * 1000);
 checkVersion();
 
+/* The two clocks tick between Today polls; a heading that says 3:07 at 3:19
+   reads as broken. Cheap: one span, thirty seconds, no re-render. */
+setInterval(function(){
+  var s = el("t-clocks");
+  if (s) s.innerHTML = clocksLine(TODAY_TZ);
+}, 30000);
+
 /* Delete is two taps, not a browser confirm(): a modal dialog blocks the page,
    reads as an error, and on iOS looks like the site has crashed. The first tap
    arms, the second commits, and anything else disarms it. */
@@ -751,9 +781,9 @@ function doDelete(kind, id){
 function canWrite(){ return !!(ME && ME.role === "author"); }
 
 /* Named people, not roles. "Insufficient permissions" is what software says;
-   these four already know exactly who is driving. */
+   these three already know exactly who is driving. */
 var DENY = {
-  gas:      "This is the button Lily and Ada tap at the pump. Only the two of them record stops — you get to watch it happen.",
+  gas:      "This is the button Lily and Ada tap at the pump. Recording stops is theirs and Andy's — you get to watch it happen.",
   food:     "Lily and Ada tap this when they eat somewhere worth remembering.",
   campsite: "This is what Lily and Ada tap when they pull in somewhere for the night.",
   lodging:  "Lily and Ada tap this for a motel, or somebody's couch.",
@@ -762,7 +792,7 @@ var DENY = {
   photo:    "Adding photographs here is Lily and Ada's. Yours arrive on their own, out of the message thread.",
   activity: "Ticking things off the list is Lily's to do.",
   staying:  "Lily and Ada say where they actually ended up. This is that button.",
-  _:        "Only Lily and Ada can change this — you get to watch it happen."
+  _:        "Only Lily, Ada, and Andy can change this — you get to watch it happen."
 };
 var DENY_T = null;
 function deny(kind, ev){
@@ -868,8 +898,11 @@ function loadToday(){
     /* "Day 6, August 7th, Forsyth, MT" — Andy's wording. The heading answers
        WHEN and WHERE in one breath and the numbers move below it, which also
        stops the old single line from wrapping to two on every phone. */
+    TODAY_TZ = d.tz_offset || TODAY_TZ;
     var l1 = 'Day '+d.day_number + ', ' + fmtLong(d.date) +
-      (d.town ? ', '+esc(d.town) : '');
+      (d.town ? ', '+esc(d.town) : '') +
+      /* nowrap so a narrow phone breaks BEFORE the clocks, never inside them */
+      ' <span id="t-clocks" style="white-space:nowrap">&middot; ' + clocksLine(TODAY_TZ) + '</span>';
     var l1b = (d.miles_today||0)+' mi today &middot; ' + state +
       (w ? ' &middot; '+w.icon+' '+degF(d.weather.temp_f) : '');
     /* Fuel goes right after mpg, per Andy. It used to be SUPPRESSED past six
@@ -1454,7 +1487,10 @@ function withLocation(cb){
 function saveJournal(date){
   var t = el("j-body"); if(!t || !t.value.trim()) return;
   var body = t.value;
-  var today = new Date().toISOString().slice(0,10);
+  /* todayISO(), not toISOString(): UTC rolls over at 6pm Mountain, and the
+     wrong answer here silently skips the location grab — evening entries
+     were saving without their map pin. */
+  var today = todayISO();
   var go = function(loc){
     var payload = { body:body, date:date,
          written_at:new Date().toISOString(), tz_offset:tzOffset() };
@@ -2091,6 +2127,9 @@ function tickActivity(id, done, placeId){
   send("/api/activity","POST",{ id:id, done:!!done }).then(function(){ loadPlace(placeId); });
 }
 
+/* Deleted by accident in the viewer-unification pass; every read happens to
+   be short-circuit-guarded, but one code motion away from a ReferenceError. */
+var LAST_DAY = null, LAST_PLACE = null;
 var RES_BACK = "tab('today')";
 function loadRes(id, from){
   show("res");

@@ -168,16 +168,19 @@ async function nightsSlept(env) {
 
     const dStart = localDate(s.at, s.tz);
     const dEnd = localDate(new Date(endMs).toISOString(), s.tz);
-    let night = null;
-    // Parked through a local midnight: the night belongs to the day it began.
-    if (dEnd !== dStart) night = dStart;
-    // Or rolled in after midnight — 2am arrivals belong to the night before.
-    else if (Number(localHour(s.at, s.tz)) < 6) night = prevDate(dStart);
-    if (!night) continue;
-
-    const prev = nights[night];
-    if (!prev || mins > prev.mins) {
-      nights[night] = { mins, lat: s.lat, lon: s.lon, at: s.at, ongoing: s.ongoing };
+    /* One night per local midnight the gap crosses, each keyed by the date it
+       began — a five-night stay is five entries, not one entry and four
+       forgotten nights. A stop that began before 6am also covers the night
+       before (the 2am arrival belongs to the night they were driving toward
+       it), whether the stay then runs one day or several. */
+    const nightKeys = [];
+    if (Number(localHour(s.at, s.tz)) < 6) nightKeys.push(prevDate(dStart));
+    for (let d = dStart, i = 0; d < dEnd && i < 90; d = nextDate(d), i++) nightKeys.push(d);
+    for (const night of nightKeys) {
+      const prev = nights[night];
+      if (!prev || mins > prev.mins) {
+        nights[night] = { mins, lat: s.lat, lon: s.lon, at: s.at, ongoing: s.ongoing };
+      }
     }
   }
 
@@ -231,6 +234,10 @@ function localHour(iso, tzOffset) {
 }
 function prevDate(d) {
   const t = new Date(d + "T12:00:00Z").getTime() - 86400000;
+  return new Date(t).toISOString().slice(0, 10);
+}
+function nextDate(d) {
+  const t = new Date(d + "T12:00:00Z").getTime() + 86400000;
   return new Date(t).toISOString().slice(0, 10);
 }
 /* Biggest town within 8 miles, else the nearest one at all. Same corridor table
@@ -422,6 +429,9 @@ export async function today(env) {
     planned_tonight: actual ? (next || null) : null,
     last_stop: lastStop || null,
     town,
+    // The car's current zone, straight off its own breadcrumbs — the client's
+    // two clocks (there / Ohio) hang off this.
+    tz_offset: offset,
     // The look of the app cycles ON EVERY VEHICLE STOP — background colour and
     // whose name comes first. Andy's reasoning: they should notice the app has
     // changed at the exact moment they get out of the car, because that is when
@@ -1320,11 +1330,13 @@ async function parkBadgeDetail(env, key) {
 async function milesBadgeDetail(env, key) {
   const n = Number.parseInt(key, 10) || 0; // a junk key degrades to 0, not a 500
   const milestone = n * 1000;
-  const [days, mileage, extra] = await Promise.all([
+  const [days, mileage, extra, tzRow] = await Promise.all([
     env.roadtrip.prepare(
       `SELECT date, day_number, miles FROM v_day_summary ORDER BY date`).all(),
     env.roadtrip.prepare(`SELECT miles FROM v_trip_mileage`).first(),
     liveExtraMiles(env),
+    env.roadtrip.prepare(
+      `SELECT time_zone FROM trips WHERE time_zone IS NOT NULL ORDER BY start_time DESC LIMIT 1`).first(),
   ]);
   // v_day_summary covers the whole PLANNED itinerary, so every day they
   // haven't lived yet is already a row with miles NULL. Counting those as 0
@@ -1334,6 +1346,16 @@ async function milesBadgeDetail(env, key) {
   for (const d of days.results) {
     run += d.miles ?? 0;
     if (run >= milestone) { hit = d; break; }
+  }
+  /* The wall unlocks a milestone the moment the LIVE total crosses it — the
+     drive still in progress, which completed days don't include yet. Without
+     this, the sheet says "not yet" about a badge rendered as earned. The
+     crossing day is today, by definition. */
+  const liveTotal = (mileage?.miles ?? 0) + extra;
+  if (!hit && milestone > 0 && liveTotal >= milestone) {
+    const todayLocal = localDate(nowIso(), tzRow?.time_zone || "-0500");
+    hit = days.results.find((d) => d.date === todayLocal) ||
+      { date: todayLocal, day_number: null };
   }
   return json({
     kind: "miles", key: n, milestone,
@@ -1502,6 +1524,12 @@ export async function createStop(env, person, body, ctx) {
 
   // INSERT OR IGNORE, keyed on the client-supplied id: the offline queue will
   // retry the same stop and must not create duplicates.
+  // Same arithmetic updateStop does at the pump: an offline-flushed fill-up
+  // arrives here as a POST and must not lose its dollar amount.
+  let cost = body.cost ?? null;
+  if (cost == null && body.gallons != null && body.price_per_gallon != null) {
+    cost = Math.round(body.gallons * body.price_per_gallon * 100) / 100;
+  }
   await env.roadtrip.prepare(
     `INSERT OR IGNORE INTO stop
        (id, date, occurred_at, tz_offset, kind, lat, lon, place, note, cost,
@@ -1510,7 +1538,7 @@ export async function createStop(env, person, body, ctx) {
   ).bind(
     id, localDate(at, offset), at, offset, body.kind,
     lat, lon, body.place ?? null, body.note ?? null,
-    body.cost ?? null, body.gallons ?? null, body.price_per_gallon ?? null,
+    cost, body.gallons ?? null, body.price_per_gallon ?? null,
     person.id, nowIso()
   ).run();
 
@@ -1521,7 +1549,13 @@ export async function createStop(env, person, body, ctx) {
      the moment it is written; the reading lands a second or two later, which
      is soon enough for the Day screen and the map and forever soon enough for
      the viewbook. If it never lands, the stop is still a stop. */
-  if (ctx && lat != null && lon != null) {
+  /* Only when the tap is fresh. A stop that sat in the offline queue for
+     hours would otherwise be stamped with flush-time weather, permanently
+     wrong and unrecoverable (the archive is a paid product). 45 minutes
+     covers a slow save and clock skew; beyond that, no reading is the honest
+     reading. */
+  const stopAgeMs = Math.abs(Date.now() - new Date(at).getTime());
+  if (ctx && lat != null && lon != null && stopAgeMs < 45 * 60000) {
     ctx.waitUntil(currentAt(lat, lon).then((w) => attachToStop(env, id, w)).catch(() => {}));
   }
 
@@ -1573,9 +1607,12 @@ export async function toggleActivity(env, person, body) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   if (!body.id) return json({ error: "id required" }, 400);
   const done = body.done ? 1 : 0;
+  // The car's zone, not Central: a 10pm Pacific tick is still "today" there.
+  const tzRow = done && !body.date ? await env.roadtrip.prepare(
+    `SELECT time_zone FROM trips WHERE time_zone IS NOT NULL ORDER BY start_time DESC LIMIT 1`).first() : null;
   const res = await env.roadtrip.prepare(
     `UPDATE activity SET done = ?, done_date = ?, done_note = COALESCE(?, done_note) WHERE id = ?`
-  ).bind(done, done ? (body.date || localDate(nowIso(), "-0500")) : null,
+  ).bind(done, done ? (body.date || localDate(nowIso(), tzRow?.time_zone || "-0500")) : null,
          body.note ?? null, body.id).run();
   // A stale or mistyped id used to return ok:true, making a no-op
   // indistinguishable from a real edit.
@@ -1612,7 +1649,7 @@ export async function linkDayPlace(env, person, body, method) {
  *
  * The button saves on the first tap by design — that is what makes it fast
  * enough to use at a pump — so mis-taps are inevitable and there has to be a
- * way out. Any author can discard any stop; there are two of them and they are
+ * way out. Any author can discard any stop; there are three of them and they are
  * in the same car.
  */
 export async function deleteStop(env, person, body) {

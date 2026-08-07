@@ -64,14 +64,26 @@ export async function currentAt(lat, lon) {
   const key = `https://weather.cache/current/${lat.toFixed(2)}/${lon.toFixed(2)}`;
   const cache = caches.default;
   const hit = await cache.match(key);
-  if (hit) return await hit.json();
+  if (hit) {
+    const j = await hit.json();
+    return j && j.fail ? null : j;
+  }
 
   const url = `${FORECAST}?latitude=${lat}&longitude=${lon}` +
     `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day` +
     `&${UNITS}&timezone=auto`;
   const d = await getJson(url);
   const c = d?.current;
-  if (!c) return null;
+  if (!c) {
+    /* Remember the failure, briefly. Without this a degraded provider adds
+       its full timeout to every Today pull for the whole outage. Sixty
+       seconds, not ten minutes: the weather should come back before anyone
+       notices the screen got slower. */
+    await cache.put(key, new Response(JSON.stringify({ fail: true }), {
+      headers: { "content-type": "application/json", "cache-control": "max-age=60" },
+    }));
+    return null;
+  }
 
   const out = {
     code: c.weather_code ?? null,
@@ -207,10 +219,13 @@ export async function alertsAt(lat, lon) {
  */
 export async function attachToStop(env, stopId, w) {
   if (!w) return false;
+  /* AND weather_at IS NULL: the insert is idempotent (the offline queue
+     retries), but this write never was — a retry hours later would replace a
+     correct reading with a later sky. First reading wins, forever. */
   await env.roadtrip.prepare(
     `UPDATE stop SET weather_code = ?, temp_f = ?, feels_f = ?, wind_mph = ?,
                      humidity = ?, weather_at = ?
-      WHERE id = ?`
+      WHERE id = ? AND weather_at IS NULL`
   ).bind(w.code ?? null, w.temp_f ?? null, w.feels_f ?? null,
          w.wind_mph ?? null, w.humidity ?? null, w.at ?? null, stopId).run();
   return true;
