@@ -146,10 +146,16 @@ import { currentAt, alertsAt, archiveAt, attachToStop } from "./weather.js";
  *
  * Returns { 'YYYY-MM-DD': {place, mins, lat, lon, source} } keyed by the date
  * the night STARTED — the night of the 5th is the one you wake from on the 6th.
+ *
+ * `stops` is optional: a caller that already derived the vehicle stops passes
+ * them in rather than making this ask for them again. Everything else this
+ * reads — the reservations and the geocoded itinerary — is 145 rows, so once
+ * the stops are in hand there is nothing here worth caching, and a cache would
+ * have to key off tables the app never writes and Andy sometimes edits by hand.
  */
-async function nightsSlept(env) {
+async function nightsSlept(env, stops) {
   const [vstops, res, intents] = await Promise.all([
-    vehicleStops(env),
+    stops || vehicleStops(env),
     env.roadtrip.prepare(
       `SELECT r.name, r.check_in_date, r.check_out_date, r.booked, i.lat, i.lon
          FROM reservation r LEFT JOIN intention i ON i.id = r.intention_id
@@ -281,9 +287,16 @@ export async function today(env) {
 
   const date = localDate(nowIso(), offset);
 
+  /* Derived ONCE and handed down. Today needs the vehicle stops twice — the
+     derived nights are built from them, and the screen's colour cycles on how
+     many there are — and it used to derive them twice, which before the cache
+     moved was 138,000 rows read for one pull of a screen that re-pulls itself
+     every ninety seconds. */
+  const vstops = await vehicleStops(env);
+
   /* Both fail soft to null / [] and both are cached at the edge, so this adds
      no upstream call on the overwhelming majority of Today pulls. */
-  const nights = await nightsSlept(env);
+  const nights = await nightsSlept(env, vstops);
   const [weatherNow, weatherAlerts] = await Promise.all([
     currentAt(last?.lat ?? null, last?.lon ?? null),
     alertsAt(last?.lat ?? null, last?.lon ?? null),
@@ -352,7 +365,6 @@ export async function today(env) {
   const dayNumber = day?.day_number
     ?? Math.floor((new Date(date) - new Date(meta.departure_date)) / 86400000) + 1;
 
-  const vstops = await vehicleStops(env);
   const stopCount = vstops.length;
 
   // Recent-weighted rather than uniform: a picture from this morning pulls
@@ -770,7 +782,37 @@ export async function map(env, person) {
 
 let VSTOP_CACHE = null;
 
+/**
+ * The cache key, bought with one indexed read instead of the whole derivation.
+ *
+ * This cache used to sit BELOW both statements: every call paid for the full
+ * trip list (half a megabyte of polylines) AND a GROUP BY across every
+ * breadcrumb in the database — 69,000 rows read — and only then was allowed to
+ * notice that nothing had changed and throw the answer away. The saving was the
+ * JS loop and none of the I/O, which is the expensive half.
+ *
+ * The key was only ever two numbers, and both come out of one query that
+ * touches fifty rows: how many trips there are, and when the newest one ended.
+ * A new trip moves the count; a trip closing moves the timestamp; nothing else
+ * can change the answer. Same key shape as before, so a warm isolate keeps its
+ * cache across this deploy.
+ */
+async function vstopKey(env) {
+  const p = await env.roadtrip.prepare(
+    `SELECT COUNT(*) AS n,
+            (SELECT t2.end_time FROM trips t2, trip_meta m2
+              WHERE t2.start_time >= m2.trip_start_at
+              ORDER BY t2.start_time DESC LIMIT 1) AS last_end
+       FROM trips t, trip_meta m
+      WHERE t.start_time >= m.trip_start_at`).first();
+  const n = p?.n ?? 0;
+  return n + ":" + (n ? String(p.last_end) : "");
+}
+
 async function vehicleStops(env) {
+  const key = await vstopKey(env);
+  if (VSTOP_CACHE && VSTOP_CACHE.key === key) return VSTOP_CACHE.stops;
+
   const [trips, lastPts] = await Promise.all([
     env.roadtrip.prepare(
       `SELECT t.transaction_id, t.start_time, t.end_time, t.time_zone, t.gps, t.distance
@@ -786,8 +828,6 @@ async function vehicleStops(env) {
         GROUP BY tp.transaction_id`).all(),
   ]);
   const rows = trips.results;
-  const key = rows.length + ":" + (rows.length ? rows[rows.length - 1].end_time : "");
-  if (VSTOP_CACHE && VSTOP_CACHE.key === key) return VSTOP_CACHE.stops;
 
   const lastCrumb = {};
   for (const p of lastPts.results) lastCrumb[p.transaction_id] = p;
@@ -1115,13 +1155,37 @@ function stateShape(name) {
 // how much track exists, so repeat opens of the Badges tab cost one query.
 let STATES_CACHE = null;
 
-export async function badges(env) {
-  // One tiny table read; thirteen rows at most, and it means adding a park's
-  // artwork is an INSERT rather than a deploy.
-  const artRows = await env.roadtrip.prepare(
-    `SELECT park_name, r2_key FROM park_badge`).all();
-  const parkArt = Object.fromEntries((artRows.results || []).map((r) => [r.park_name, r.r2_key]));
-  const [trips, points, parks, mileage, fills, bespoke] = await Promise.all([
+/**
+ * Which states they have been in, and the first local day in each.
+ *
+ * One derivation, two consumers: the wall wants the shapes, the detail sheet
+ * wants only `first_date`. Those used to be two copies of this loop — a
+ * deliberate duplication, because the alternative at the time was editing the
+ * grid everybody looks at, and two screens disagreeing about the first day in
+ * Montana is worse than one extra pass over the track. They still cannot
+ * disagree, because there is now one function; and the pass is no longer
+ * extra, because the key is bought with an indexed read.
+ *
+ * `MAX(rowid)/15`, not `MAX(rowid)`: the derivation reads every fifteenth
+ * breadcrumb, so keying on the raw maximum would throw the cache away fourteen
+ * times out of fifteen for input the derivation never looks at. Integer
+ * division moves exactly when a fifteenth point arrives — the same cadence the
+ * old key had when it counted those rows the expensive way.
+ */
+async function statesWall(env) {
+  const probe = await env.roadtrip.prepare(
+    `SELECT (SELECT MAX(rowid) FROM track_points) AS tp_max,
+            (SELECT COUNT(*) FROM trips t, trip_meta m
+              WHERE t.start_time >= m.trip_start_at AND t.gps IS NOT NULL) AS ngps,
+            (SELECT t2.start_time FROM trips t2, trip_meta m2
+              WHERE t2.start_time >= m2.trip_start_at AND t2.gps IS NOT NULL
+              ORDER BY t2.start_time DESC LIMIT 1) AS last_start`).first();
+  const ngps = probe?.ngps ?? 0;
+  const key = ngps + ":" + (ngps ? String(probe.last_start) : "") +
+              ":" + Math.floor((probe?.tp_max ?? 0) / 15);
+  if (STATES_CACHE && STATES_CACHE.key === key) return STATES_CACHE;
+
+  const [trips, points] = await Promise.all([
     env.roadtrip.prepare(
       `SELECT t.gps, t.start_time, t.time_zone
          FROM trips t, trip_meta m
@@ -1133,6 +1197,41 @@ export async function badges(env) {
     // point is a fix every few miles, plenty to notice a border.
     env.roadtrip.prepare(
       `SELECT lat, lon, ts FROM track_points WHERE (rowid % 15) = 0 ORDER BY ts`).all(),
+  ]);
+
+  const seen = {}; // state -> first local date
+  for (const t of trips.results) {
+    const day = localDate(t.start_time, t.time_zone || "-0500");
+    for (const [x, y] of thinnedTrack(t.gps, 60)) {
+      const st = stateOfPoint(x, y);
+      if (st && !(st in seen)) seen[st] = day;
+    }
+  }
+  const tz = trips.results.length
+    ? trips.results[trips.results.length - 1].time_zone || "-0500" : "-0500";
+  for (const p of points.results) {
+    const st = stateOfPoint(p.lon, p.lat);
+    if (st && !(st in seen)) seen[st] = localDate(p.ts, tz);
+  }
+
+  STATES_CACHE = {
+    key,
+    seen,
+    states: Object.entries(seen)
+      .map(([state, first_date]) => ({ state, first_date, shape: stateShape(state) }))
+      .sort((a, b) => (a.first_date < b.first_date ? -1 : 1)),
+  };
+  return STATES_CACHE;
+}
+
+export async function badges(env) {
+  // One tiny table read; thirteen rows at most, and it means adding a park's
+  // artwork is an INSERT rather than a deploy.
+  const artRows = await env.roadtrip.prepare(
+    `SELECT park_name, r2_key FROM park_badge`).all();
+  const parkArt = Object.fromEntries((artRows.results || []).map((r) => [r.park_name, r.r2_key]));
+  const [wall, parks, mileage, fills, bespoke] = await Promise.all([
+    statesWall(env),
     (async () => {
       const [first, parkRows] = await Promise.all([
         firstVisitDates(env),
@@ -1164,35 +1263,9 @@ export async function badges(env) {
         ORDER BY b.created_at DESC`).all(),
   ]);
 
-  const key = trips.results.length + ":" +
-    (trips.results.length ? trips.results[trips.results.length - 1].start_time : "") +
-    ":" + points.results.length;
-  if (!STATES_CACHE || STATES_CACHE.key !== key) {
-    const seen = {}; // state -> first local date
-    for (const t of trips.results) {
-      const day = localDate(t.start_time, t.time_zone || "-0500");
-      for (const [x, y] of thinnedTrack(t.gps, 60)) {
-        const st = stateOfPoint(x, y);
-        if (st && !(st in seen)) seen[st] = day;
-      }
-    }
-    const tz = trips.results.length
-      ? trips.results[trips.results.length - 1].time_zone || "-0500" : "-0500";
-    for (const p of points.results) {
-      const st = stateOfPoint(p.lon, p.lat);
-      if (st && !(st in seen)) seen[st] = localDate(p.ts, tz);
-    }
-    STATES_CACHE = {
-      key,
-      states: Object.entries(seen)
-        .map(([state, first_date]) => ({ state, first_date, shape: stateShape(state) }))
-        .sort((a, b) => (a.first_date < b.first_date ? -1 : 1)),
-    };
-  }
-
   const miles = Math.round(((mileage?.miles ?? 0) + await liveExtraMiles(env)) * 10) / 10;
   return json({
-    states: STATES_CACHE.states,
+    states: wall.states,
     parks: parks.results.map((p) => ({ ...p, image_key: parkArt[p.name] || null })),
     miles: { total: miles, earned: Math.floor(miles / 1000),
              to_next: Math.round(1000 - (miles % 1000)) },
@@ -1206,46 +1279,12 @@ export async function badges(env) {
 const round1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
 const round2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
 
-/** state -> first local date, by EXACTLY the derivation badges() uses: every
-    completed trip's polyline thinned to 60 points, plus every 15th live
-    breadcrumb for trips the nightly sweep hasn't given a polyline yet.
-
-    Deliberately duplicated rather than shared, because in badges() this loop
-    lives inside a cache block that also builds the badge SHAPES — work a
-    detail sheet has no use for, and pulling it apart would mean editing the
-    grid everyone already looks at. The cost of the copy is one extra pass
-    over the track; the cost of letting the two screens compute "first day in
-    Montana" differently is that one of them is lying. */
-async function stateFirstDates(env) {
-  const [trips, points] = await Promise.all([
-    env.roadtrip.prepare(
-      `SELECT t.gps, t.start_time, t.time_zone
-         FROM trips t, trip_meta m
-        WHERE t.start_time >= m.trip_start_at AND t.gps IS NOT NULL
-        ORDER BY t.start_time`).all(),
-    env.roadtrip.prepare(
-      `SELECT lat, lon, ts FROM track_points WHERE (rowid % 15) = 0 ORDER BY ts`).all(),
-  ]);
-  const seen = {};
-  for (const t of trips.results) {
-    const day = localDate(t.start_time, t.time_zone || "-0500");
-    for (const [x, y] of thinnedTrack(t.gps, 60)) {
-      const st = stateOfPoint(x, y);
-      if (st && !(st in seen)) seen[st] = day;
-    }
-  }
-  const tz = trips.results.length
-    ? trips.results[trips.results.length - 1].time_zone || "-0500" : "-0500";
-  for (const p of points.results) {
-    const st = stateOfPoint(p.lon, p.lat);
-    if (st && !(st in seen)) seen[st] = localDate(p.ts, tz);
-  }
-  return seen;
-}
-
 async function stateBadgeDetail(env, key) {
-  const [firsts, photoRows, stopRows] = await Promise.all([
-    stateFirstDates(env),
+  // The wall's own derivation, cached — the sheet's only unique field is
+  // first_date, and re-walking every polyline and every fifteenth breadcrumb
+  // to recover one date cost 23,000 rows read per tap on a badge.
+  const [wall, photoRows, stopRows] = await Promise.all([
+    statesWall(env),
     env.roadtrip.prepare(
       `SELECT date, lat, lon FROM photo WHERE lat IS NOT NULL AND lon IS NOT NULL`).all(),
     env.roadtrip.prepare(
@@ -1261,7 +1300,7 @@ async function stateBadgeDetail(env, key) {
     if (stateOfPoint(s.lon, s.lat) === key) { stops++; if (s.date) days.add(s.date); }
   return json({
     kind: "state", key,
-    first_date: firsts[key] ?? null,
+    first_date: wall.seen[key] ?? null,
     photos, stops, days: days.size,
     // Per-state mileage would mean clipping every polyline at every border
     // crossing. The badge never claims a number, so we don't invent one.
