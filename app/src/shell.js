@@ -87,7 +87,6 @@ export const SHELL = String.raw`<!DOCTYPE html>
     .dial{height:0;padding-bottom:min(100%,384px)}
     .dialbtn{height:auto;padding:14px 0}
     .dialcentre{height:0;padding-bottom:98%}
-    .parkposter img{height:150px}
   }
   /* Buttons sit ON the picture, small, around its edge — the photo is the
      ground rather than a hole in the middle of a ring. z-index over the
@@ -108,7 +107,6 @@ export const SHELL = String.raw`<!DOCTYPE html>
     width:98%;aspect-ratio:1;border-radius:50%;overflow:hidden;cursor:pointer;
     background:var(--tap);box-shadow:0 5px 20px rgba(60,40,20,.26)}
   .dialcentre img{width:100%;height:100%;object-fit:cover;display:block}
-  .dial.solo{margin:16px auto 2px}
   .herocap{margin:0 0 14px;text-align:center;font-size:12.5px;color:var(--ink-2)}
   /* Darkest where the words are, clearing toward the rim so the picture still
      reads as a picture. Pulled back from .74/.66/.30/.10 on 2026-08-06 — Andy:
@@ -223,13 +221,6 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .popgo:active{background:var(--tap)}
   .popgo .pophint{padding:0 11px 11px}
   .rtpop .popbody{padding-bottom:4px}
-  .parkwall{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:11px;margin-bottom:11px}
-  .parkposter{margin:0;background:var(--card);border:1px solid var(--line);border-radius:12px;
-    overflow:hidden;box-shadow:0 2px 8px rgba(80,60,30,.10)}
-  .parkposter img{display:block;width:100%;aspect-ratio:600/797;object-fit:cover;background:var(--tap)}
-  .parkposter.noart img{display:none}
-  .parkposter figcaption{font-size:11.5px;line-height:1.3;padding:7px 9px 8px;color:var(--ink);font-weight:640}
-  .parkposter figcaption span{opacity:.55;font-weight:400}
   .blingwrap{margin:0 0 12px}
   .blingtitle{font-family:'Bling',Georgia,serif;font-weight:400;margin:0;
     font-size:clamp(27px,8.4vw,36px);line-height:1.1;letter-spacing:.2px;
@@ -271,7 +262,6 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .daynum b{display:block;font-size:19px;line-height:1;font-weight:660}
   .daynum small{font-size:10px;color:var(--ink-3);text-transform:uppercase}
   .maparea{position:relative;height:340px;border-radius:var(--r);overflow:hidden;border:1px solid var(--line);background:#eef1ec}
-  .badges{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
   .badge{background:var(--road-soft);color:var(--road);border-radius:99px;padding:7px 12px;font-size:12.5px;font-weight:600}
   /* --paper-soft is computed in JS, because color-mix() needs Safari 16.2 and
      an unsupported value invalidates the WHOLE declaration — leaving the nav
@@ -1108,18 +1098,6 @@ function saveJot(){
   });
 }
 
-function openStop(){
-  show("stop");
-  el("s-stop").innerHTML =
-    '<button class="back" onclick="tab(\'today\')">&larr;</button>' +
-    '<h1>What kind of stop?</h1><p class="sub">' + fmtTime(new Date().toISOString()) +
-    ' &middot; recorded automatically</p><div class="grid">' +
-    ["gas","food","campsite","lodging","event","observation"].map(function(k){
-      return '<div class="kind" onclick="saveStop(\''+jsId(k)+'\')"><span class="ic">'+ICON[k]+
-             '</span><span class="lb">'+k.charAt(0).toUpperCase()+k.slice(1)+'</span></div>';
-    }).join("") +
-    '</div><p class="tiny" style="margin-top:16px">One tap is enough. Everything else is optional and can wait until tonight.</p>';
-}
 
 function saveStop(kind){
   // The Today grid calls this directly, and the saved screen was rendering

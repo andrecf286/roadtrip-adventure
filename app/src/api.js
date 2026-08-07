@@ -3,7 +3,11 @@
  *
  * Everything date-shaped goes through the LOCAL date, never UTC. They cross
  * three time zones and an 11pm photo belongs to that evening. `v_day_summary`
- * and `v_segment_local` already encode the rule; nothing here re-derives it.
+ * and `v_segment_local` encode the rule in SQL; everything outside those views
+ * gets it from localDate() in `tz.js`, which is the only implementation of it
+ * on this side. (This header used to claim nothing here re-derives local dates.
+ * It always did — that is what localDate is for — and the claim was load-bearing
+ * enough that three copies of the offset parser grew underneath it.)
  */
 
 const json = (obj, status = 200) =>
@@ -13,6 +17,13 @@ const json = (obj, status = 200) =>
   });
 
 const nowIso = () => new Date().toISOString();
+
+/* One and two decimal places, null-safe. Declared here with the other small
+   helpers rather than beside their first caller: as consts halfway down the
+   file they were one code motion from a temporal-dead-zone ReferenceError,
+   and a rounding helper is not worth that. */
+const round1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
+const round2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
 
 /** Client-minted ids go into DOM id= and onclick= attributes downstream, and
     one of the writers (badge) is viewer-reachable — so an id is either a
@@ -1147,8 +1158,8 @@ function stateShape(name) {
   };
 }
 
-// States derivation walks every trip polyline; cache per isolate, keyed on
-// how much track exists, so repeat opens of the Badges tab cost one query.
+// The states derivation walks every trip polyline and every fifteenth
+// breadcrumb. Cached per isolate; statesWall() below owns the key.
 let STATES_CACHE = null;
 
 /**
@@ -1271,9 +1282,6 @@ export async function badges(env) {
 }
 
 /* ----------------------------------------------------- badge detail sheet */
-
-const round1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
-const round2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
 
 async function stateBadgeDetail(env, key) {
   // The wall's own derivation, cached — the sheet's only unique field is
@@ -1662,7 +1670,15 @@ export async function toggleActivity(env, person, body) {
   return json({ ok: true });
 }
 
-/** Link a day to a place. This is what makes an intention "visited". */
+/** Link a day to a place, in the day_intention table.
+ *
+ *  This does NOT make an intention "visited", whatever the route is called:
+ *  derivedVisits() decides that, from where the car actually stopped, and has
+ *  since the marker work landed. day_intention and this endpoint stay in the
+ *  schema as fossils — the phones still on the old shell can reach them and
+ *  nothing breaks — but no read path consults them for truth. The comment this
+ *  replaces said the opposite, which is the more expensive kind of stale: it
+ *  described the design the code was replaced BY. */
 export async function linkDayPlace(env, person, body, method) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   if (!body.date || !body.intention_id) return json({ error: "date and intention_id required" }, 400);
