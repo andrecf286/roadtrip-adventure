@@ -151,6 +151,11 @@ export const SHELL = String.raw`<!DOCTYPE html>
   /* The seam. A labelled line across the timeline where the past stops and the
      plan starts, so "now" is a place on the page rather than something you have
      to work out from the dates. */
+  .maplinks{display:flex;align-items:center;gap:10px;margin:10px 0 2px}
+  .maplinks .ghostbtn{margin:0;flex:1}
+  .maplinks .gmap{flex:none;font-size:12.5px;color:var(--ink-3);text-decoration:none;
+    padding:8px 4px}
+  .maplinks .gmap:active{color:var(--sun)}
   .seam{display:flex;align-items:center;gap:10px;margin:16px 0 10px;
     color:var(--sun);font-size:12px;font-weight:700;letter-spacing:.4px;
     text-transform:uppercase}
@@ -369,6 +374,48 @@ function offlineInto(id, retry){
 }
 function send(u,m,b){ return fetch(u,{method:m,credentials:"same-origin",
   headers:{"content-type":"application/json"},body:JSON.stringify(b)}).then(function(r){ return r.json(); }); }
+
+/* --- Handing off to a real map -------------------------------------------
+   The basemap in this app is a 30km-wide corridor at z0-14. That is a deliberate
+   trade — no third-party key anywhere in the map path — but it means no z15+
+   detail, no search, no satellite, and no directions, ever. The moment somebody
+   needs "how do I actually get in there" or "what IS that place", this app
+   cannot answer and should hand over rather than pretend.
+
+   Andy asked for it after being caught by exactly that gap: the app said "near
+   Forsyth, MT" while Google, on the same coordinates, said "Rosebud East
+   Campground" — a near-anagram of the East Rosebud Campground on Lily's list,
+   160 miles away. One tap to a real map is how he settled it, and it should not
+   have required leaving the app.
+
+   Labelled by intent rather than by button count: somewhere still ahead of them
+   wants DIRECTIONS (two teenagers arriving after dark), somewhere already
+   behind wants a LOOK (three parents at home wondering where their kids
+   actually were). Apple first because all six are on iPhones and
+   maps.apple.com opens the app natively; Google alongside because navigation
+   preference is personal and is not the app's business. */
+/* The phone's own date. Only used to ask "is this booking still ahead of us",
+   where being an hour off at midnight changes nothing. */
+function todayISO(){
+  var d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") +
+    "-" + String(d.getDate()).padStart(2,"0");
+}
+function mapsLinks(lat, lon, name, drive){
+  if (lat == null || lon == null) return "";
+  var ll = Number(lat).toFixed(5) + "," + Number(lon).toFixed(5);
+  var q = encodeURIComponent(name || "");
+  var apple = drive
+    ? "https://maps.apple.com/?daddr=" + ll + "&dirflg=d"
+    : "https://maps.apple.com/?ll=" + ll + "&q=" + (q || ll);
+  var google = drive
+    ? "https://www.google.com/maps/dir/?api=1&destination=" + ll
+    : "https://www.google.com/maps/search/?api=1&query=" + ll;
+  return '<div class="maplinks">' +
+    '<a class="ghostbtn" href="'+apple+'" target="_blank" rel="noopener">' +
+      (drive ? "Directions" : "Open in Maps") + '</a>' +
+    '<a class="gmap" href="'+google+'" target="_blank" rel="noopener">Google</a></div>';
+}
 
 /* "8h", "8h 20m", "45 min". Nobody wants 485 minutes. */
 function hoursish(mins){
@@ -937,7 +984,8 @@ function loadToday(){
       var ln = d.last_night;
       lastNight = '<div class="card" style="margin-top:10px"><div class="row">' +
         '<span><span style="opacity:.6">Last night &middot; </span><b>'+esc(ln.place)+'</b></span>' +
-        (ln.mins ? '<span class="tiny">'+hoursish(ln.mins)+'</span>' : '') + '</div></div>';
+        (ln.mins ? '<span class="tiny">'+hoursish(ln.mins)+'</span>' : '') + '</div>' +
+        mapsLinks(ln.lat, ln.lon, ln.place, false) + '</div>';
     }
 
     el("s-today").innerHTML = alerts +
@@ -1367,7 +1415,8 @@ function loadDay(date, from){
             : (d.slept.mins ? hoursish(d.slept.mins) : ''))+'</span></div>' +
           (d.slept.source === "town"
             ? '<p class="tiny" style="margin:6px 0 0">Where the car spent the night &mdash; ' +
-              'nothing booked here.</p>' : '') + '</div>'
+              'nothing booked here.</p>' : '') +
+          mapsLinks(d.slept.lat, d.slept.lon, d.slept.place, false) + '</div>'
         : '') +
       '<h2>Stops</h2>' + stops;
   });
@@ -2027,6 +2076,9 @@ function loadPlace(id, from){
          activity (italic, small, accent-coloured). Her place notes run to
          ~800 characters and up to 3,800; the same styling makes a wall.
          Left rule in the accent colour says "hers"; the body reads as body. */
+      /* visited_on is the derived-visit set the timeline bands on, so "still
+         ahead" here can never disagree with where the place was listed. */
+      mapsLinks(i.lat, i.lon, i.name, !(d.visited_on && d.visited_on.length)) +
       (i.notes ? '<h2>Notes</h2><div class="card" style="border-left:3px solid var(--sun)">' +
         '<p style="margin:0;color:var(--ink-2);font-size:14.5px;line-height:1.6;' +
         'white-space:pre-wrap;word-break:break-word">' +
@@ -2065,6 +2117,8 @@ function loadRes(id, from){
       '<div class="card" style="padding:4px 14px">'+kv+'</div>' +
       (r.notes ? '<h2>Notes</h2><div class="card"><p class="hers" style="margin:0;font-size:14.5px;line-height:1.5">'+
         esc(r.notes)+'</p></div>' : '') +
+      mapsLinks(r.place_lat, r.place_lon, r.place_name || r.name,
+                r.check_in_date ? r.check_in_date >= todayISO() : false) +
       '<div class="actionbar">' +
         (r.url ? '<a class="ghostbtn" href="'+esc(r.url)+'" target="_blank" rel="noopener">Booking page</a>' : '') +
       '</div>';
@@ -2334,9 +2388,13 @@ function basemapOverlays(map, d){
      nothing happened at all. Andy: "that doesn't work well." The popup is a
      260px card that is already under the thumb; making the card itself the
      button removes the second aim entirely. */
-  function openable(date, html){
+  function openable(date, html, lat, lon, name){
     return '<div class="popgo" onclick="loadDay(\''+esc(date)+'\',\'map\')">' + html +
-      '<div class="pophint">Open this day &rarr;</div></div>';
+      '<div class="pophint">Open this day &rarr;</div></div>' +
+      /* Outside the popgo wrapper: a link inside a div that navigates on click
+         would fire both. */
+      (lat != null ? '<div style="padding:0 11px 11px">' +
+        mapsLinks(lat, lon, name, false) + '</div>' : '');
   }
   function dayLine(date){
     var di = (d.day_index || {})[date];
@@ -2371,7 +2429,8 @@ function basemapOverlays(map, d){
       '<div class="popm">' +
       (pr.ongoing ? 'Still there' : (pr.mins ? 'For ' + (pr.mins >= 60
         ? Math.floor(pr.mins/60) + 'h ' + (pr.mins%60) + 'm' : pr.mins + ' min') : '')) +
-      (pr.at ? ' &middot; ' + fmtTime(pr.at) : '') + '</div></div>'));
+      (pr.at ? ' &middot; ' + fmtTime(pr.at) : '') + '</div></div>',
+      f.geometry.coordinates[1], f.geometry.coordinates[0], "Where the car stopped"));
   });
   map.on("click", "stop-dots", function(e){
     var f = e.features[0], pr = f.properties;
@@ -2383,7 +2442,8 @@ function basemapOverlays(map, d){
           (wx(pr.weather_code)
             ? ' &middot; '+wx(pr.weather_code).icon+' '+degF(pr.temp_f) : '')+'</div>' +
         (dayPlace(pr.date) ? '<div class="popm">'+esc(dayPlace(pr.date))+'</div>' : '') +
-      '</div>'));
+      '</div>',
+      f.geometry.coordinates[1], f.geometry.coordinates[0], pr.place || pr.kind));
   });
   map.on("click", "photo-pins", function(e){
     var f = e.features[0], pr = f.properties;

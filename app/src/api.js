@@ -402,7 +402,9 @@ export async function today(env) {
        it began, so on the morning of the 7th this is the night of the 6th. */
     last_night: (() => {
       const k = prevDate(date), n = nights[k];
-      return n && n.place ? { date: k, place: n.place, mins: n.mins, source: n.source } : null;
+      return n && n.place
+        ? { date: k, place: n.place, mins: n.mins, source: n.source, lat: n.lat, lon: n.lon }
+        : null;
     })(),
     /* Live, where the car is. Deliberately NOT stored anywhere: nobody will
        want to know in October what the dashboard said at 3pm on a Tuesday.
@@ -565,7 +567,8 @@ export async function day(env, date, person) {
     // Where they slept at the end of THIS day. Null is a real answer — the
     // first night of the trip has one, a day still in progress does not.
     slept: slept && slept.place
-      ? { place: slept.place, mins: slept.mins, source: slept.source, ongoing: !!slept.ongoing }
+      ? { place: slept.place, mins: slept.mins, source: slept.source,
+          ongoing: !!slept.ongoing, lat: slept.lat, lon: slept.lon }
       : null,
     stops: stops.results,
     photos: photos.results,
@@ -623,7 +626,8 @@ export async function places(env) {
 
 export async function reservation(env, id) {
   const row = await env.roadtrip.prepare(
-    `SELECT r.*, i.name AS place_name FROM reservation r
+    `SELECT r.*, i.name AS place_name, i.lat AS place_lat, i.lon AS place_lon
+       FROM reservation r
        LEFT JOIN intention i ON i.id = r.intention_id WHERE r.id = ?`).bind(id).first();
   if (!row) return json({ error: "not found" }, 404);
   return json(row);
