@@ -20,15 +20,20 @@ const nowIso = () => new Date().toISOString();
 const safeId = (x) =>
   (typeof x === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(x)) ? x : crypto.randomUUID();
 
-/** Local date for an instant given a '-0500'-style offset. */
-function localDate(iso, offset) {
-  if (!iso) return null;
-  let mins = 0;
-  if (offset && offset.length >= 3) {
-    const sign = offset[0] === "-" ? -1 : 1;
-    mins = sign * (parseInt(offset.slice(1, 3), 10) * 60 + parseInt(offset.slice(3, 5) || "0", 10));
-  }
-  return new Date(new Date(iso).getTime() + mins * 60000).toISOString().slice(0, 10);
+import { HOME_TZ, localDate, localHour } from "./tz.js";
+
+/**
+ * The zone the car is in, off its own last trip — the app's one answer to
+ * "what time is it where they are."
+ *
+ * Two screens carried this query verbatim and would have drifted the first
+ * time either was touched. Falls back to Ohio, like everything else here.
+ */
+async function tripOffset(env) {
+  const row = await env.roadtrip.prepare(
+    `SELECT time_zone FROM trips WHERE time_zone IS NOT NULL
+      ORDER BY start_time DESC LIMIT 1`).first();
+  return row?.time_zone || HOME_TZ;
 }
 
 /**
@@ -231,13 +236,6 @@ async function nightsSlept(env, stops) {
   return nights;
 }
 
-/* Local hour-of-day at an instant, given a "-0600"-style offset. */
-function localHour(iso, tzOffset) {
-  const sign = (tzOffset || "-0500").startsWith("-") ? -1 : 1;
-  const mins = sign * (parseInt((tzOffset || "-0500").slice(1, 3), 10) * 60 +
-                       parseInt((tzOffset || "-0500").slice(3, 5), 10));
-  return new Date(new Date(iso).getTime() + mins * 60000).getUTCHours();
-}
 function prevDate(d) {
   const t = new Date(d + "T12:00:00Z").getTime() - 86400000;
   return new Date(t).toISOString().slice(0, 10);
@@ -281,9 +279,7 @@ export async function today(env) {
     .prepare(`SELECT fuel_level, ts FROM track_points
                WHERE fuel_level IS NOT NULL ORDER BY ts DESC LIMIT 1`).first();
 
-  const offset = (await env.roadtrip
-    .prepare(`SELECT time_zone FROM trips WHERE time_zone IS NOT NULL ORDER BY start_time DESC LIMIT 1`)
-    .first())?.time_zone || "-0500";
+  const offset = await tripOffset(env);
 
   const date = localDate(nowIso(), offset);
 
@@ -466,9 +462,7 @@ export async function trip(env) {
   // Was hardcoded to Central. Once they reach Mountain or Pacific that is an
   // hour or three ahead of where they actually are, and the day list grows a
   // phantom tomorrow with zero miles every evening.
-  const offset = (await env.roadtrip
-    .prepare(`SELECT time_zone FROM trips WHERE time_zone IS NOT NULL ORDER BY start_time DESC LIMIT 1`)
-    .first())?.time_zone || "-0500";
+  const offset = await tripOffset(env);
   const today_ = localDate(nowIso(), offset);
 
   const days = await env.roadtrip.prepare(
@@ -862,8 +856,8 @@ async function vehicleStops(env) {
       // the question is not how long they were parked but whether they were
       // parked THROUGH a local midnight.
       until: nextStart,
-      tz: t.time_zone || "-0500",
-      date: localDate(t.end_time, t.time_zone || "-0500"),
+      tz: t.time_zone || HOME_TZ,
+      date: localDate(t.end_time, t.time_zone || HOME_TZ),
       lat, lon,
       mins: nextStart ? mins : null, // null = still there
       ongoing: !nextStart,
@@ -946,7 +940,7 @@ export async function ingestPhoto(env, request) {
 
   const id = safeId((form.get("client_id") || "").toString() || null);
   const takenAt = (form.get("taken_at") || nowIso()).toString();
-  const offset = (form.get("tz_offset") || "-0500").toString();
+  const offset = (form.get("tz_offset") || HOME_TZ).toString();
   const date = localDate(takenAt, offset);
 
   let lat = form.get("lat") ? Number(form.get("lat")) : null;
@@ -997,7 +991,7 @@ export async function uploadPhoto(env, person, request) {
 
   const id = safeId((form.get("client_id") || "").toString() || null);
   const takenAt = (form.get("taken_at") || nowIso()).toString();
-  const offset = (form.get("tz_offset") || "-0500").toString();
+  const offset = (form.get("tz_offset") || HOME_TZ).toString();
   const date = localDate(takenAt, offset);
   let lat = form.get("lat") ? Number(form.get("lat")) : null;
   let lon = form.get("lon") ? Number(form.get("lon")) : null;
@@ -1209,14 +1203,14 @@ async function statesWall(env) {
 
   const seen = {}; // state -> first local date
   for (const t of trips.results) {
-    const day = localDate(t.start_time, t.time_zone || "-0500");
+    const day = localDate(t.start_time, t.time_zone || HOME_TZ);
     for (const [x, y] of thinnedTrack(t.gps, 60)) {
       const st = stateOfPoint(x, y);
       if (st && !(st in seen)) seen[st] = day;
     }
   }
   const tz = trips.results.length
-    ? trips.results[trips.results.length - 1].time_zone || "-0500" : "-0500";
+    ? trips.results[trips.results.length - 1].time_zone || HOME_TZ : HOME_TZ;
   for (const p of points.results) {
     const st = stateOfPoint(p.lon, p.lat);
     if (st && !(st in seen)) seen[st] = localDate(p.ts, tz);
@@ -1377,13 +1371,12 @@ async function parkBadgeDetail(env, key) {
 async function milesBadgeDetail(env, key) {
   const n = Number.parseInt(key, 10) || 0; // a junk key degrades to 0, not a 500
   const milestone = n * 1000;
-  const [days, mileage, extra, tzRow] = await Promise.all([
+  const [days, mileage, extra, tz] = await Promise.all([
     env.roadtrip.prepare(
       `SELECT date, day_number, miles FROM v_day_summary ORDER BY date`).all(),
     env.roadtrip.prepare(`SELECT miles FROM v_trip_mileage`).first(),
     liveExtraMiles(env),
-    env.roadtrip.prepare(
-      `SELECT time_zone FROM trips WHERE time_zone IS NOT NULL ORDER BY start_time DESC LIMIT 1`).first(),
+    tripOffset(env),
   ]);
   // v_day_summary covers the whole PLANNED itinerary, so every day they
   // haven't lived yet is already a row with miles NULL. Counting those as 0
@@ -1400,7 +1393,7 @@ async function milesBadgeDetail(env, key) {
      crossing day is today, by definition. */
   const liveTotal = (mileage?.miles ?? 0) + extra;
   if (!hit && milestone > 0 && liveTotal >= milestone) {
-    const todayLocal = localDate(nowIso(), tzRow?.time_zone || "-0500");
+    const todayLocal = localDate(nowIso(), tz);
     hit = days.results.find((d) => d.date === todayLocal) ||
       { date: todayLocal, day_number: null };
   }
@@ -1554,7 +1547,7 @@ export async function createStop(env, person, body, ctx) {
   if (!kinds.includes(body.kind)) return json({ error: "bad kind" }, 400);
 
   const at = body.occurred_at || nowIso();
-  const offset = body.tz_offset || "-0500";
+  const offset = body.tz_offset || HOME_TZ;
   const id = safeId(body.client_id);
 
   // A stop with no position can't be a map marker or count toward a visited
@@ -1634,7 +1627,7 @@ export async function createJournal(env, person, body) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   if (!body.body || !body.body.trim()) return json({ error: "empty" }, 400);
   const at = body.written_at || nowIso();
-  const offset = body.tz_offset || "-0500";
+  const offset = body.tz_offset || HOME_TZ;
   // An explicit date wins: writing on Tuesday about Sunday should file under
   // Sunday. Without this the entry silently landed on today and vanished from
   // the screen the author was looking at.
@@ -1655,11 +1648,10 @@ export async function toggleActivity(env, person, body) {
   if (!body.id) return json({ error: "id required" }, 400);
   const done = body.done ? 1 : 0;
   // The car's zone, not Central: a 10pm Pacific tick is still "today" there.
-  const tzRow = done && !body.date ? await env.roadtrip.prepare(
-    `SELECT time_zone FROM trips WHERE time_zone IS NOT NULL ORDER BY start_time DESC LIMIT 1`).first() : null;
+  const tz = done && !body.date ? await tripOffset(env) : HOME_TZ;
   const res = await env.roadtrip.prepare(
     `UPDATE activity SET done = ?, done_date = ?, done_note = COALESCE(?, done_note) WHERE id = ?`
-  ).bind(done, done ? (body.date || localDate(nowIso(), tzRow?.time_zone || "-0500")) : null,
+  ).bind(done, done ? (body.date || localDate(nowIso(), tz)) : null,
          body.note ?? null, body.id).run();
   // A stale or mistyped id used to return ok:true, making a no-op
   // indistinguishable from a real edit.

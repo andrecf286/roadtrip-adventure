@@ -25,6 +25,8 @@
  * journal — an outage must never cost a stop, a Today screen, or a photograph.
  */
 
+import { tzMinutes, localToInstant } from "./tz.js";
+
 const FORECAST = "https://api.open-meteo.com/v1/forecast";
 const ARCHIVE  = "https://archive-api.open-meteo.com/v1/archive";
 
@@ -113,10 +115,7 @@ export async function currentAt(lat, lon) {
 export async function archiveAt(lat, lon, iso, tzOffset) {
   if (lat == null || lon == null || !iso) return null;
   // The stop's local wall-clock time: occurred_at is UTC, tz_offset is like "-0500".
-  const sign = (tzOffset || "-0500").startsWith("-") ? -1 : 1;
-  const offMin = sign * (parseInt((tzOffset || "-0500").slice(1, 3), 10) * 60 +
-                         parseInt((tzOffset || "-0500").slice(3, 5), 10));
-  const localMs = new Date(iso).getTime() + offMin * 60000;
+  const localMs = new Date(iso).getTime() + tzMinutes(tzOffset) * 60000;
   const local = new Date(localMs);
   const day = local.toISOString().slice(0, 10);
 

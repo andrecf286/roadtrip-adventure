@@ -1090,10 +1090,7 @@ function saveStop(kind){
     '<h1 style="margin-top:14px">Recording&hellip;</h1>' +
     '<p class="sub">Getting a fix on where you are</p></div>';
   var id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
-  var mins = -new Date().getTimezoneOffset();
-  var sign = mins < 0 ? "-" : "+";
-  var off = sign + String(Math.floor(Math.abs(mins)/60)).padStart(2,"0") + String(Math.abs(mins)%60).padStart(2,"0");
-  var item = { client_id:id, kind:kind, occurred_at:new Date().toISOString(), tz_offset:off };
+  var item = { client_id:id, kind:kind, occurred_at:new Date().toISOString(), tz_offset:tzOffset() };
 
   function finish(){
     enqueue(item);
@@ -1257,11 +1254,7 @@ function openStaying(){
 function saveStaying(kind){
   var n = el("stay-name"), note = el("stay-note");
   var id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
-  var mins = -new Date().getTimezoneOffset();
-  var sign = mins < 0 ? "-" : "+";
-  var off = sign + String(Math.floor(Math.abs(mins)/60)).padStart(2,"0") +
-            String(Math.abs(mins)%60).padStart(2,"0");
-  var item = { client_id:id, kind:kind, occurred_at:new Date().toISOString(), tz_offset:off,
+  var item = { client_id:id, kind:kind, occurred_at:new Date().toISOString(), tz_offset:tzOffset(),
                place:(n && n.value.trim()) || null, note:(note && note.value.trim()) || null };
   function done(){ enqueue(item); tab("today"); }
   // Latched, exactly as saveStop is: an unanswered iOS permission prompt fires
