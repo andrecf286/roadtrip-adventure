@@ -67,6 +67,32 @@ function thinnedTrack(gpsText, max) {
   } catch { return []; }
 }
 
+/* One degree of latitude is 69 miles, one of longitude 69·cos(lat). Squared,
+   because every comparison here is against a squared distance and a square
+   root buys nothing. This number appeared as a bare 4761 in six places. */
+const SQ_DEG_MI = 69 * 69;
+
+/* How close the car has to sit to a place before the place counts as visited.
+   Three surfaces answer questions that must never disagree — was this place
+   visited, where did they sleep, how many photographs were taken here — and
+   they answer them against this one disc. */
+const VISIT_MI = 25;
+
+/**
+ * Is B within `mi` miles of A? Flat-earth, fine at road-trip scale.
+ *
+ * The cosine is taken at A, so A is the anchor: the place, the campsite, the
+ * night. Three copies of this arithmetic used to be inlined and each picked
+ * its own anchor; the anchors are preserved exactly, which is why this takes
+ * the two points in an order rather than a set.
+ */
+function near(alat, alon, blat, blon, mi) {
+  if (alat == null || alon == null || blat == null || blon == null) return false;
+  const cos2 = Math.cos((alat * Math.PI) / 180) ** 2;
+  return (blat - alat) * (blat - alat) * SQ_DEG_MI +
+         (blon - alon) * (blon - alon) * SQ_DEG_MI * cos2 <= mi * mi;
+}
+
 /** Path length in miles of [lon,lat] points (flat-earth, fine at this scale). */
 function pathMilesOf(pts) {
   let mi = 0;
@@ -195,13 +221,6 @@ async function nightsSlept(env, stops) {
     }
   }
 
-  const near = (lat, lon, alat, alon, mi) => {
-    if (alat == null || alon == null) return false;
-    const cos2 = Math.cos((lat * Math.PI) / 180) ** 2;
-    return (alat - lat) * (alat - lat) * 4761 +
-           (alon - lon) * (alon - lon) * 4761 * cos2 <= mi * mi;
-  };
-
   for (const [night, n] of Object.entries(nights)) {
     /* Name it from the plan when the plan agrees, and only then. A booked
        reservation covering that night whose place is where the car actually sat
@@ -217,13 +236,13 @@ async function nightsSlept(env, stops) {
       const covers = r.check_in_date <= night && night < out;
       const sameDay = r.check_in_date === night;
       if (!(covers || sameDay)) continue;
-      if (r.lat != null && !near(n.lat, n.lon, r.lat, r.lon, 25)) continue;
+      if (r.lat != null && !near(n.lat, n.lon, r.lat, r.lon, VISIT_MI)) continue;
       named = { place: r.name, source: "reservation" };
       break;
     }
     if (!named) {
       for (const i of intents.results) {
-        if (near(n.lat, n.lon, i.lat, i.lon, 25)) { named = { place: i.name, source: "intention" }; break; }
+        if (near(n.lat, n.lon, i.lat, i.lon, VISIT_MI)) { named = { place: i.name, source: "intention" }; break; }
       }
     }
     if (!named) {
@@ -251,7 +270,7 @@ function nearestTown(lat, lon) {
   const cos2 = Math.cos((lat * Math.PI) / 180) ** 2;
   let best = null, bestD2 = Infinity, bigBest = null, bigPop = 0;
   for (const [name, st, tlat, tlon, pop] of CORRIDOR_TOWNS) {
-    const d2 = (tlat - lat) * (tlat - lat) * 4761 + (tlon - lon) * (tlon - lon) * 4761 * cos2;
+    const d2 = (tlat - lat) * (tlat - lat) * SQ_DEG_MI + (tlon - lon) * (tlon - lon) * SQ_DEG_MI * cos2;
     if (d2 < bestD2) { bestD2 = d2; best = { name, st }; }
     if (d2 <= 64 && pop > bigPop) { bigPop = pop; bigBest = { name, st }; }
   }
@@ -334,23 +353,11 @@ export async function today(env) {
   const ageMin = last ? (Date.now() - new Date(last.ts).getTime()) / 60000 : null;
   const moving = ageMin !== null && ageMin < 6 && (last.speed || 0) > 3;
 
-  // Nearest town for the header: "Day 9 · Miles City, MT". Prefer somewhere
-  // with a name people know — the biggest town within 8 miles wins; failing
-  // that, whatever is nearest. Corridor-filtered GeoNames, so the scan is
-  // ~2k rows of static data.
-  let town = null;
-  if (last) {
-    const cos2 = Math.cos((last.lat * Math.PI) / 180) ** 2;
-    let best = null, bestD2 = Infinity, bigBest = null, bigPop = 0;
-    for (const [name, st, tlat, tlon, pop] of CORRIDOR_TOWNS) {
-      const d2 = (tlat - last.lat) * (tlat - last.lat) * 4761 +
-                 (tlon - last.lon) * (tlon - last.lon) * 4761 * cos2;
-      if (d2 < bestD2) { bestD2 = d2; best = { name, st }; }
-      if (d2 <= 64 && pop > bigPop) { bigPop = pop; bigBest = { name, st }; }
-    }
-    const pick = bigBest || best;
-    if (pick && (bigBest || bestD2 <= 40 * 40)) town = pick.name + ", " + pick.st;
-  }
+  // Nearest town for the header: "Day 9 · Miles City, MT". The Day screen
+  // says "near Medora, ND" from the same function, so the header and the day
+  // cannot name different towns for the same coordinate — which they could
+  // when this was a second copy of that loop.
+  const town = last ? nearestTown(last.lat, last.lon) : null;
 
   // v_day_summary only sums COMPLETED trips (distance lands at tripEnd), so
   // the number froze mid-drive — confusing at 70 mph. Add the live path
@@ -699,15 +706,6 @@ export async function map(env, person) {
   ]);
   // ~90 points per segment keeps the whole trip well under 100 KB even at
   // six weeks, and is indistinguishable at this zoom.
-  const pathMiles = (pts) => {
-    let mi = 0;
-    for (let i = 1; i < pts.length; i++) {
-      const dx = (pts[i][0] - pts[i-1][0]) * 69 * Math.cos((pts[i][1] * Math.PI) / 180);
-      const dy = (pts[i][1] - pts[i-1][1]) * 69;
-      mi += Math.sqrt(dx * dx + dy * dy);
-    }
-    return mi;
-  };
   const byTrip = {};
   for (const p of gapPoints.results)
     (byTrip[p.transaction_id] = byTrip[p.transaction_id] || []).push([p.lon, p.lat]);
@@ -721,7 +719,7 @@ export async function map(env, person) {
       // A polyline that draws at least ~70% of the trip's reported distance
       // is trusted; a shorter one is truncated and gets its breadcrumbs too.
       const claimed = s.distance ?? null;
-      if (claimed == null || claimed <= 0 || pathMiles(line) >= 0.7 * claimed)
+      if (claimed == null || claimed <= 0 || pathMilesOf(line) >= 0.7 * claimed)
         covered.add(s.transaction_id);
     }
   }
@@ -877,16 +875,12 @@ async function derivedVisits(env) {
     env.roadtrip.prepare(
       `SELECT id, lat, lon FROM intention WHERE lat IS NOT NULL AND dropped = 0`).all(),
   ]);
-  const R2MI = 25 * 25;
   const visits = {}; // date -> Set of intention ids
   const mark = (date, lat, lon) => {
     if (!date || lat == null) return;
-    const cos2 = Math.cos((lat * Math.PI) / 180) ** 2;
-    for (const it of intents.results) {
-      const d2 = (it.lat - lat) * (it.lat - lat) * 4761 +
-                 (it.lon - lon) * (it.lon - lon) * 4761 * cos2;
-      if (d2 <= R2MI) (visits[date] = visits[date] || new Set()).add(it.id);
-    }
+    for (const it of intents.results)
+      if (near(lat, lon, it.lat, it.lon, VISIT_MI))
+        (visits[date] = visits[date] || new Set()).add(it.id);
   };
   for (const s of vstops) mark(s.date, s.lat, s.lon);
   for (const s of userStops.results) mark(s.date, s.lat, s.lon);
@@ -1333,14 +1327,8 @@ async function parkBadgeDetail(env, key) {
   // derivedVisits() uses to decide a place was visited at all — so "photos
   // here" can never contradict "you were here".
   let photos = 0;
-  if (intent.lat != null && intent.lon != null) {
-    const cos2 = Math.cos((intent.lat * Math.PI) / 180) ** 2;
-    for (const p of photoRows.results) {
-      const d2 = (p.lat - intent.lat) * (p.lat - intent.lat) * 4761 +
-                 (p.lon - intent.lon) * (p.lon - intent.lon) * 4761 * cos2;
-      if (d2 <= 25 * 25) photos++;
-    }
-  }
+  for (const p of photoRows.results)
+    if (near(intent.lat, intent.lon, p.lat, p.lon, VISIT_MI)) photos++;
 
   /* A 25-mile disc around a single centroid cannot cover a park that is 70
      miles across. Theodore Roosevelt proves it: they demonstrably visited on
