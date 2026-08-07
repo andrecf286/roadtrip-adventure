@@ -1484,6 +1484,21 @@ export async function uploadBadge(env, person, request) {
   const title = (form.get("title") || "").toString().trim();
   if (!title) return json({ error: "title required" }, 400);
   const id = safeId((form.get("client_id") || "").toString() || null);
+
+  /* Owner-or-author, and it has to run BEFORE the put — after it the picture
+     is already gone. This route writes R2 at badges/<id>.jpg from a
+     CALLER-SUPPLIED id and then INSERTs OR IGNORE, so a client_id naming
+     somebody else's badge replaced their artwork, changed no row, and
+     returned ok:true. Everyone can reach this route on purpose — the badge
+     economy is the one thing the viewers get to do — so the gate is on the
+     id already belonging to someone, not on the role. A badge nobody has
+     claimed yet stays creatable by anyone, which is the surface working as
+     designed. Same rule PATCH /api/badge has always applied. */
+  const owner = await env.roadtrip
+    .prepare(`SELECT awarded_by FROM badge WHERE id = ?`).bind(id).first();
+  if (owner && person.id !== owner.awarded_by && person.role !== "author")
+    return json({ error: "not yours to edit" }, 403);
+
   let imageKey = null;
   const img = form.get("image");
   if (img && typeof img !== "string") {
