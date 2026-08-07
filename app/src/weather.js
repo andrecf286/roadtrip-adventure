@@ -15,8 +15,10 @@
  *                 Ephemeral by nature — nobody will want to know in October
  *                 what the dashboard said at 3pm on a Tuesday.
  *
- *   archiveAt()   what it was like at a past instant. Used ONLY to backfill
- *                 the handful of stops that predate this feature. Not a
+ *   archiveAt()   what it was like at a past instant. UNREACHABLE since
+ *                 2026-08-07 — the one-off backfill it was written for is
+ *                 done and api.js no longer imports it. Kept because the
+ *                 endpoint knowledge is the expensive part. Not a
  *                 general tool: Open-Meteo's archive is a paid product and the
  *                 endpoint answering keyless today is not something to build a
  *                 habit on. Capture forward; that is the whole design.
@@ -225,6 +227,14 @@ export async function alertsAt(lat, lon) {
  */
 export async function attachToStop(env, stopId, w, tzOffset) {
   if (!w) return false;
+  /* No usable instant, no write — not a partial one. Writing the temperature
+     while leaving weather_at NULL satisfies this statement's own
+     `AND weather_at IS NULL` guard, so the next offline-queue retry would be
+     free to replace a correct reading with a later sky. That guard is the
+     whole reason this column exists in the shape it does; do not hand it a
+     row it will happily overwrite. */
+  const at = localToInstant(w.at ?? null, tzOffset);
+  if (!at) return false;
   /* AND weather_at IS NULL: the insert is idempotent (the offline queue
      retries), but this write never was — a retry hours later would replace a
      correct reading with a later sky. First reading wins, forever. */
@@ -234,6 +244,6 @@ export async function attachToStop(env, stopId, w, tzOffset) {
       WHERE id = ? AND weather_at IS NULL`
   ).bind(w.code ?? null, w.temp_f ?? null, w.feels_f ?? null,
          w.wind_mph ?? null, w.humidity ?? null,
-         localToInstant(w.at ?? null, tzOffset), stopId).run();
+         at, stopId).run();
   return true;
 }

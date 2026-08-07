@@ -37,9 +37,11 @@ const ALLOWED_ORIGIN = "https://roadtripadventure.app";
  * conus-z14 is the whole lower 48 plus the Vancouver leg (bbox
  * -125.2,24.4,-66.9,50.0), z0-14, 8.95 GB, from the Protomaps 20260807 build.
  *
- * The ROUTE keeps its old name on purpose. style.json names this path, phones
- * cache style.json, and renaming it would be a restyle rather than an object
- * swap — which is the one thing this change is not allowed to be.
+ * The ROUTE keeps its old name on purpose: style.json names this path, and
+ * renaming it would be a restyle rather than an object swap. Bumping the ?v
+ * QUERY on that same path is not a restyle — the style's layers, fonts,
+ * sprites and rules are byte-identical either way — and it is the only thing
+ * that reaches a phone holding an immutable copy.
  */
 const BASEMAP = "conus-z14.pmtiles";
 
@@ -57,12 +59,24 @@ const BASEMAP = "conus-z14.pmtiles";
  *
  * Putting the archive name IN the key means swapping the archive IS the
  * invalidation. Nobody has to remember to purge, and nobody can forget. The
- * PUBLIC url is untouched — this is the Worker's private key, so style.json
- * and every phone's cached copy of it stay exactly as they are.
+ * PUBLIC url is untouched — this is the Worker's private key.
+ *
+ * It reaches the EDGE and nothing else. A phone that already holds a tile is
+ * holding it under `immutable, max-age=31536000` and no Worker-side key can
+ * reach into that; the lever for the phones is the ?v on the style URL in
+ * shell.js, which is bumped in the same change. Both are needed. This one
+ * without that one fixes the map for new readers and leaves it broken for the
+ * six people it was fixed for.
  */
+const FALLBACK = "us-z8.pmtiles";
+
 function tileCacheKey(request) {
   const u = new URL(request.url);
-  return new Request(u.origin + "/__ck/" + BASEMAP + u.pathname, { method: "GET" });
+  // BOTH archives, because a cached 204 is a statement about both of them and
+  // the fallback gets re-cut too. Naming only the primary left the fallback
+  // with no invalidation path at all.
+  return new Request(u.origin + "/__ck/" + BASEMAP + "+" + FALLBACK + u.pathname,
+                     { method: "GET" });
 }
 
 class R2Source {
@@ -133,7 +147,7 @@ export default {
            answers it. Kept deliberately after the CONUS swap — it no longer
            has anything to do with the corridor, it is the edge of the map. */
         if ((!t || !t.data) && z <= 8)
-          t = await archive(env, "us-z8.pmtiles").getZxy(z, x, y);
+          t = await archive(env, FALLBACK).getZxy(z, x, y);
       }
       catch (e) { return new Response("tile error: " + e.message, { status: 500, headers: cors }); }
       if (!t || !t.data) {

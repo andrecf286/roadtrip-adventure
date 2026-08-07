@@ -41,4 +41,27 @@ UPDATE stop
              || CAST(substr(tz_offset, 4, 2) AS INTEGER) || ' minutes'))
  WHERE weather_at IS NOT NULL
    AND weather_at NOT LIKE '%Z'
-   AND tz_offset IS NOT NULL;
+   /* Guard the INPUT, not just the output's shape. The first draft guarded
+      only on `NOT LIKE '%Z'`, which meant a row this statement could not
+      actually convert still came out stamped with a Z and was therefore
+      excluded from every future run — mis-converted and marked done, with no
+      recovery. Two ways that bites, both found by review rather than by luck:
+      an offset SQLite cannot read (an empty string, a zone NAME) CASTs to 0
+      and the row is "converted" by zero hours; and a weather_at datetime()
+      cannot parse yields NULL, which would have destroyed the reading outright
+      — and the archive it came from is a paid product. */
+   AND tz_offset GLOB '[+-][0-9][0-9][0-9][0-9]'
+   AND datetime(
+         weather_at,
+         (CASE WHEN substr(tz_offset, 1, 1) = '-' THEN '+' ELSE '-' END)
+           || CAST(substr(tz_offset, 2, 2) AS INTEGER) || ' hours',
+         (CASE WHEN substr(tz_offset, 1, 1) = '-' THEN '+' ELSE '-' END)
+           || CAST(substr(tz_offset, 4, 2) AS INTEGER) || ' minutes') IS NOT NULL;
+
+/* The GLOB is deliberately narrower than app/src/tz.js, which also accepts
+   colon forms. substr(tz_offset,4,2) reads MM in "+HHMM" and ":M" in
+   "+HH:MM", so a colon form would silently lose its half hour — and this
+   migration is exactly the second parser that tz.js's own header warns about.
+   Rather than teach SQL to read both shapes, this refuses the one it cannot:
+   a colon-form row is left alone, visibly unconverted, for a human. Nothing
+   writes one today. */

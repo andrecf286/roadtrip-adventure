@@ -51,8 +51,24 @@ export function localHour(iso, offset) {
  * becomes an instant that can be subtracted from `occurred_at`.
  */
 export function localToInstant(naive, offset) {
-  if (!naive) return null;
-  const t = Date.parse(naive.length <= 16 ? naive + ":00Z" : naive + "Z");
+  if (typeof naive !== "string" || !naive) return null;
+  /* Accept what the provider sends today AND what it might send tomorrow. The
+     first version of this tested `length <= 16` and appended ":00Z", which is
+     a guess about the format rather than a reading of it: a trailing Z, an
+     offset already on the string, seconds, or a bare date each produced NaN
+     and therefore null — and a null here does NOT mean "no reading", it means
+     attachToStop writes every OTHER weather column while leaving weather_at
+     empty, which re-arms the `AND weather_at IS NULL` retry guard that exists
+     to stop a later sky overwriting a correct one. Parse the shape instead. */
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/
+    .exec(naive.trim());
+  if (!m) return null;
+  // Already carries a zone: it is an instant, no offset arithmetic to do.
+  if (m[5]) {
+    const t = Date.parse(m[5] === "Z" ? naive : naive.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+    return Number.isNaN(t) ? null : new Date(t).toISOString();
+  }
+  const t = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4] || "00"}Z`);
   if (Number.isNaN(t)) return null;
   return new Date(t - tzMinutes(offset) * 60000).toISOString();
 }

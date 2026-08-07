@@ -137,11 +137,14 @@ async function liveExtraMiles(env) {
 async function positionAt(env, iso, toleranceMin) {
   const t = new Date(iso).getTime();
   if (!t) return null;
-  const near = await env.roadtrip.prepare(
+  // `nearest`, not `near`: near() is the module-level disc predicate, and a
+  // local binding of that name would hand the next person a D1 row where they
+  // expected a function.
+  const nearest = await env.roadtrip.prepare(
     `SELECT lat, lon, ts FROM track_points
       ORDER BY ABS(strftime('%s', ts) - strftime('%s', ?)) LIMIT 1`).bind(iso).first();
-  if (near && Math.abs(new Date(near.ts).getTime() - t) / 60000 <= toleranceMin)
-    return { lat: near.lat, lon: near.lon };
+  if (nearest && Math.abs(new Date(nearest.ts).getTime() - t) / 60000 <= toleranceMin)
+    return { lat: nearest.lat, lon: nearest.lon };
   // No breadcrumb near in TIME usually means the car was PARKED (breadcrumbs
   // only flow while driving). If the moment falls between one trip's end and
   // the next trip's start, the car sat at the earlier trip's last position —
@@ -197,7 +200,7 @@ import { currentAt, alertsAt, attachToStop } from "./weather.js";
  */
 async function nightsSlept(env, stops) {
   const [vstops, res, intents] = await Promise.all([
-    stops || vehicleStops(env),
+    stops ?? vehicleStops(env),
     env.roadtrip.prepare(
       `SELECT r.name, r.check_in_date, r.check_out_date, r.booked, i.lat, i.lon
          FROM reservation r LEFT JOIN intention i ON i.id = r.intention_id
@@ -796,9 +799,12 @@ let VSTOP_CACHE = null;
  *
  * The key was only ever two numbers, and both come out of one query that
  * touches fifty rows: how many trips there are, and when the newest one ended.
- * A new trip moves the count; a trip closing moves the timestamp; nothing else
- * can change the answer. Same key shape as before, so a warm isolate keeps its
- * cache across this deploy.
+ * A new trip moves the count; a trip closing moves the timestamp. What it does
+ * NOT see — and the old key did not either — is an EDIT to a trip already
+ * counted: the webhook's UPSERT can revise an older trip's time_zone on a late
+ * tripEnd re-delivery, which changes which local day that stop belongs to, with
+ * no movement in either number. Not a regression, but do not read this key as
+ * "nothing else can change the answer", because something can.
  */
 async function vstopKey(env) {
   const p = await env.roadtrip.prepare(
@@ -1173,11 +1179,21 @@ let STATES_CACHE = null;
  * disagree, because there is now one function; and the pass is no longer
  * extra, because the key is bought with an indexed read.
  *
+ * What the key cannot see, stated plainly: an EDIT to a polyline or a
+ * time_zone on a trip already counted. Nothing in the app writes those — only
+ * a hand-edit or a late webhook re-delivery does — but before this the badge
+ * detail sheet re-derived on every tap and was the one surface that would have
+ * noticed. It no longer is. That is the price of the tap costing 130 rows read
+ * instead of 23,200, and it is worth it; it is not free.
+ *
  * `MAX(rowid)/15`, not `MAX(rowid)`: the derivation reads every fifteenth
  * breadcrumb, so keying on the raw maximum would throw the cache away fourteen
  * times out of fifteen for input the derivation never looks at. Integer
  * division moves exactly when a fifteenth point arrives — the same cadence the
- * old key had when it counted those rows the expensive way.
+ * old key had when it counted those rows the expensive way. Equivalent only
+ * because track_points is append-only: no DELETE exists anywhere in the repo,
+ * and the ingest's INSERT OR IGNORE does not burn rowids. Delete a row and the
+ * two stop agreeing.
  */
 async function statesWall(env) {
   const probe = await env.roadtrip.prepare(

@@ -405,11 +405,12 @@ function offlineInto(id, retry){
    degrades to null, which is the case that used to throw. */
 function send(u,m,b){ return fetch(u,{method:m,credentials:"same-origin",
   headers:{"content-type":"application/json"},body:JSON.stringify(b)})
-  .then(function(r){ return r.json().catch(function(){ return r.ok ? { ok:true } : null; }); })
+  .then(function(r){ return r.json().catch(function(){ return null; }); })
   .catch(function(){ return null; }); }
 
 /* --- Handing off to a real map -------------------------------------------
-   The basemap in this app is a 30km-wide corridor at z0-14. That is a deliberate
+   The basemap in this app is the lower 48 at z0-14 (it was a 30km corridor
+   until 2026-08-07). Self-hosted, which is a deliberate
    trade — no third-party key anywhere in the map path — but it means no z15+
    detail, no search, no satellite, and no directions, ever. The moment somebody
    needs "how do I actually get in there" or "what IS that place", this app
@@ -786,7 +787,20 @@ function doDelete(kind, id){
   // nav highlight (QA finding) — the delete is an edit of the current view,
   // not a navigation.
   var day = el("s-day").classList.contains("on") && LAST_DAY;
-  send(url, "DELETE", { id: id }).then(function(){
+  send(url, "DELETE", { id: id }).then(function(r){
+    /* This .then IS the success path — it navigates. When send() could reject,
+       a dead connection meant this never ran and the armed button just sat
+       there, which was the honest outcome. Once send() started resolving null
+       instead, "the request failed" and "the row is gone" became the same
+       thing here, and the app would carry them off the screen they were
+       looking at and then render "No connection" over it. The row would still
+       be there. Check the body. */
+    if (!r || !r.ok) {
+      var b = el("del-" + jsId(id));
+      if (b) { b.textContent = "Couldn't delete"; b.style.color = "#a8332a"; }
+      ARMED = null;
+      return;
+    }
     if (day) loadDay(LAST_DAY);
     else if (kind === "badge") tab("badges");
     else if (kind === "journal" || kind === "observation" || kind === "photo") tab("memories");
@@ -1001,13 +1015,13 @@ function loadToday(){
         '<span class="dialarrow" id="dialarrow">&#10148;</span>' +
         kinds.map(function(k,i){
           var act = author ? (k === "journal" ? "openJot()" : "saveStop(\'"+k+"\')")
-                           : "deny(\'"+k+"\',event)";
+                           : "deny(\'"+jsId(k)+"\',event)";
           var ic = k === "journal" ? "&#9997;" : ICON[k];
           var a = (-90 + i*60) * Math.PI/180, R = 36;
           var x = (50 + R*Math.cos(a)).toFixed(2), y = (50 + R*Math.sin(a)).toFixed(2);
           return '<button class="dialbtn" id="dial-'+k+'" style="left:'+x+'%;top:'+y+'%" ' +
             'onclick="'+act+'" ontouchstart="promptFor(\''+jsId(k)+'\')" ' +
-            'onmouseenter="promptFor(\''+k+'\')">' +
+            'onmouseenter="promptFor(\''+jsId(k)+'\')">' +
             '<span class="ic">'+ic+'</span><span class="lb">'+KLABEL[k]+'</span></button>';
         }).join("") +
       '</div>' +
@@ -1399,7 +1413,7 @@ function loadDay(date, from){
   show("day");
   LAST_DAY = date;
   get("/api/day?date="+encodeURIComponent(date)).then(function(d){
-    if (!d) { offlineInto("s-day", "loadDay('"+date+"')"); return; }
+    if (!d) { offlineInto("s-day", "loadDay('"+jsId(date)+"')"); return; }
     var s = d.summary || {};
     var stops = d.stops.map(function(x){
       /* The weather this stop happened in, frozen at the moment of the tap.
@@ -1433,7 +1447,7 @@ function loadDay(date, from){
         '<div class="row"><span>&#128205; '+esc(p.name)+'</span><span></span></div></div>';
     }).join("");
     el("s-day").innerHTML =
-      '<button class="back" onclick="tab(\''+DAY_FROM+'\')">&larr;</button>' +
+      '<button class="back" onclick="tab(\''+jsId(DAY_FROM)+'\')">&larr;</button>' +
       '<h1>Day '+(s.day_number||"")+'</h1><p class="sub">'+fmtDay(date)+
       (s.places?' &middot; '+esc(s.places):'')+'</p>' +
       '<div class="stats">' +
@@ -1453,7 +1467,7 @@ function loadDay(date, from){
       '<div class="card" style="margin-top:9px"><textarea id="j-body" placeholder="What happened today?"' +
         (canWrite() ? '' : ' readonly') + '></textarea>' +
         '<button class="ghostbtn" onclick="' +
-        (canWrite() ? 'saveJournal(\''+date+'\')' : 'deny(\'journal\',event)') +
+        (canWrite() ? 'saveJournal(\''+jsId(date)+'\')' : 'deny(\'journal\',event)') +
         '">Save entry</button></div>' +
       (d.slept && d.slept.place
         ? '<h2>The night</h2><div class="card"><div class="row">' +
@@ -1697,7 +1711,7 @@ function openBadge(kind, key){
       badgeFacts([["Given", fmtShort(b.created_at.slice(0,10))]]) +
       (mine ? '<div class="row" style="margin-top:16px;gap:10px">' +
         '<button class="ghostbtn" style="margin:0;flex:1" onclick="editBadge(\''+jsId(key)+'\')">Edit</button>' +
-        '<button class="ghostbtn" id="del-'+esc(key)+'" style="margin:0;flex:1" ' +
+        '<button class="ghostbtn" id="del-'+jsId(key)+'" style="margin:0;flex:1" ' +
           'onclick="armDelete(\'badge\',\''+jsId(key)+'\',event)">Delete</button></div>'
         : '') +
       '<div id="bd-edit"></div>';
@@ -2087,10 +2101,10 @@ function loadPlace(id, from){
   LAST_PLACE = id;
   if (from) PLACE_FROM = from;
   get("/api/place?id="+encodeURIComponent(id)).then(function(d){
-    if (!d) { offlineInto("s-place", "loadPlace('"+id+"')"); return; }
+    if (!d) { offlineInto("s-place", "loadPlace('"+jsId(id)+"')"); return; }
     if (!d.intention) {
       el("s-place").innerHTML =
-        '<button class="back" onclick="tab(\''+PLACE_FROM+'\')">&larr;</button>' +
+        '<button class="back" onclick="tab(\''+jsId(PLACE_FROM)+'\')">&larr;</button>' +
         '<h1>Not found</h1><p class="sub">That place is no longer in the plan.</p>';
       return;
     }
@@ -2100,7 +2114,7 @@ function loadPlace(id, from){
          about whose list it is instead of a silent cursor:default, which read
          as the app being broken. */
       return '<li onclick="' + (canWrite()
-        ? 'tickActivity(\''+a.id+'\','+(a.done?0:1)+',\''+id+'\')'
+        ? 'tickActivity(\''+jsId(a.id)+'\','+(a.done?0:1)+',\''+jsId(id)+'\')'
         : 'deny(\'activity\',event)') + '">' +
         '<span class="box'+(a.done?" done":"")+'"></span><span'+(a.done?' class="done-txt"':'')+'>' +
         esc(a.name)+(a.distance_mi?' &middot; '+a.distance_mi+' mi':'') +
@@ -2112,7 +2126,7 @@ function loadPlace(id, from){
         '<p class="tiny" style="margin:6px 0 0">'+(r.booked?'Booked':'Not booked')+'</p></div>';
     }).join("");
     el("s-place").innerHTML =
-      '<button class="back" onclick="tab(\''+PLACE_FROM+'\')">&larr;</button>' +
+      '<button class="back" onclick="tab(\''+jsId(PLACE_FROM)+'\')">&larr;</button>' +
       '<h1>'+esc(i.name)+'</h1><p class="sub">' +
       (i.planned_arrival?'Hoped for '+fmtShort(i.planned_arrival):'No date') +
       (i.planned_nights?' &middot; '+i.planned_nights+' night'+(i.planned_nights===1?'':'s'):'') +
@@ -2138,7 +2152,15 @@ function loadPlace(id, from){
 }
 
 function tickActivity(id, done, placeId){
-  send("/api/activity","POST",{ id:id, done:!!done }).then(function(){ loadPlace(placeId); });
+  send("/api/activity","POST",{ id:id, done:!!done }).then(function(r){
+    /* Only re-render on a real answer. The tick is not queued, so offline it
+       is lost either way — but reloading the screen offline costs the screen
+       as well: loadPlace's own get() fails and offlineInto wipes the place,
+       its notes, its activities and its reservations, replacing all of it with
+       "No connection". Losing the tap is the small failure; losing what they
+       were reading, standing in the park, is the large one. */
+    if (r && r.ok) loadPlace(placeId);
+  });
 }
 
 /* Deleted by accident in the viewer-unification pass; every read happens to
@@ -2148,14 +2170,14 @@ var RES_BACK = "tab('today')";
 function loadRes(id, from){
   show("res");
   RES_BACK = (from === "place" && LAST_PLACE)
-    ? "loadPlace('" + LAST_PLACE + "')" : "tab('today')";
+    ? "loadPlace('" + jsId(LAST_PLACE) + "')" : "tab('today')";
   get("/api/reservation?id="+encodeURIComponent(id)).then(function(r){
     if (r && r.error === "not found") {
       el("s-res").innerHTML = '<button class="back" onclick="'+RES_BACK+'">&larr;</button>' +
         '<h1>Not found</h1><p class="sub">That booking is no longer in the plan.</p>';
       return;
     }
-    if (!r || r.error) { offlineInto("s-res", "loadRes('"+id+"')"); return; }
+    if (!r || r.error) { offlineInto("s-res", "loadRes('"+jsId(id)+"')"); return; }
     var kv = "";
     if(r.check_in_at)  kv += '<div class="kv"><span>Check in</span><b>'+esc(r.check_in_at)+'</b></div>';
     if(r.check_out_at) kv += '<div class="kv"><span>Check out</span><b>'+esc(r.check_out_at)+'</b></div>';
@@ -2568,7 +2590,17 @@ function renderBasemap(d){
       '<span style="color:#1f6f5c">&#9679;</span> now &middot; ' +
       '&#128247; photos &middot; &#9999;&#65039; journal &mdash; tap anything to open it</p>';
   var b = trackBounds(d);
-  var opts = { container:"bigmap", style: TILES_BASE + "/style.json?v=3",
+  /* v=4 is what actually reaches the six phones, and it is the whole delivery
+     mechanism for the 2026-08-07 corridor -> lower-48 basemap swap.
+     Everything in the tile path is served "immutable, max-age=31536000", so a
+     phone that opened the Map screen during the corridor era holds a year-long
+     copy of the old style AND of every half-empty tile it drew. Swapping the
+     R2 object reaches new readers and nobody else. The chain that reaches THEM
+     is: this string changes -> the shell hash changes -> the app offers its
+     one-tap refresh -> a new style.json URL is fetched -> that style names
+     tiles at ?v=3 instead of ?v=2 -> every tile URL is new to the browser and
+     to the edge. Bump this whenever the basemap archive changes. */
+  var opts = { container:"bigmap", style: TILES_BASE + "/style.json?v=4",
                minZoom:3, maxZoom:17.5, attributionControl:false };
   if (b) { opts.bounds = b; opts.fitBoundsOptions = { padding: 36 }; }
   else { opts.center = [-98, 42]; opts.zoom = 3.5; }
