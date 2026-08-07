@@ -819,13 +819,21 @@ async function vehicleStops(env) {
          FROM trips t, trip_meta m
         WHERE t.start_time >= m.trip_start_at
         ORDER BY t.start_time`).all(),
-    // Last breadcrumb per trip: truer than a truncated polyline's last vertex.
+    /* Last breadcrumb per trip: truer than a truncated polyline's last vertex.
+       Asked one trip at a time, not as a GROUP BY over the whole table.
+       track_points is keyed PRIMARY KEY (transaction_id, ts), so "the newest
+       crumb of trip X" is a seek to the end of one index range — but the
+       grouped form could not use that key and scanned all 23,000 entries to
+       find 41 answers, 69,039 rows read. Same rows out, verified set-equal
+       against the old statement on production data: 177 rows read. */
     env.roadtrip.prepare(
-      `SELECT tp.transaction_id, tp.lat, tp.lon, MAX(tp.ts) AS ts
-         FROM track_points tp
-         JOIN trips t ON t.transaction_id = tp.transaction_id, trip_meta m
-        WHERE t.start_time >= m.trip_start_at
-        GROUP BY tp.transaction_id`).all(),
+      `SELECT t.transaction_id, tp.lat, tp.lon, tp.ts
+         FROM trips t, trip_meta m
+         JOIN track_points tp ON tp.rowid = (
+              SELECT tp2.rowid FROM track_points tp2
+               WHERE tp2.transaction_id = t.transaction_id
+               ORDER BY tp2.ts DESC LIMIT 1)
+        WHERE t.start_time >= m.trip_start_at`).all(),
   ]);
   const rows = trips.results;
 
