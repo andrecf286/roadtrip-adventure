@@ -372,8 +372,24 @@ function offlineInto(id, retry){
   e.innerHTML = '<h1>No connection</h1><p class="sub">Can\'t load this right now.</p>' +
     '<button class="ghostbtn" onclick="' + retry + '">Try again</button>';
 }
+/* Same contract as get(): the caller gets a parsed body or it gets null, and
+   it never gets a rejection. Seven call sites had no rejection handler, so a
+   dropped connection — the ordinary state of a phone in a canyon — threw into
+   nothing and the screen just sat there, which is the failure that reads as
+   "the app is broken" rather than "try again". Every one of those sites
+   already tests !r || !r.ok, or ignores the body entirely, so null lands on a
+   path that was written before this change.
+
+   NOT get()'s literal shape (r.ok ? r.json() : null): flush() retires a
+   permanently-unacceptable stop from the offline queue by reading
+   error === "bad kind" off a 400, and discarding non-ok bodies would turn
+   that into null and wedge the queue on that item forever. The error BODY
+   survives. Only a response carrying no JSON at all — a proxy's HTML 502 —
+   degrades to null, which is the case that used to throw. */
 function send(u,m,b){ return fetch(u,{method:m,credentials:"same-origin",
-  headers:{"content-type":"application/json"},body:JSON.stringify(b)}).then(function(r){ return r.json(); }); }
+  headers:{"content-type":"application/json"},body:JSON.stringify(b)})
+  .then(function(r){ return r.json().catch(function(){ return r.ok ? { ok:true } : null; }); })
+  .catch(function(){ return null; }); }
 
 /* --- Handing off to a real map -------------------------------------------
    The basemap in this app is a 30km-wide corridor at z0-14. That is a deliberate
