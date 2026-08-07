@@ -337,8 +337,35 @@ var ME = null, POS = null;
    single-quoted JS string literals inside double-quoted HTML attributes in
    about fifteen places, and this file already carries a note about a prior
    stored-XSS hole from an id reaching an attribute unescaped. */
+/* esc() is for TEXT and for ordinary attribute VALUES. It is NOT what makes an
+   inline handler safe, and the shape of the code implies otherwise, which is
+   the dangerous part.
+
+   onclick="loadPlace('X')" is a double-quoted HTML attribute containing
+   single-quoted JavaScript, and the HTML parser decodes entities BEFORE the JS
+   parser ever sees the string. So esc() turning ' into &#39; buys nothing
+   there: the entity decodes back to a quote and closes the JS string exactly
+   as the raw character would have. Half the handler sites in this file called
+   esc() and half did not, and the difference between them was never security —
+   it was whoever wrote them last.
+
+   jsId() is the rule made structural instead of remembered. It keeps only
+   characters that cannot close the JS string or the HTML attribute — letters,
+   digits, space, and _ . : / - — and drops the quote, the backslash, the
+   ampersand and the angle brackets, which are the entire escape surface here.
+
+   The first draft of this said "ids only, never names" and reduced to the id
+   charset, and a render diff across every screen caught it doing damage:
+   openPhoto carries an R2 PATH with slashes in it, and openBadge carries a
+   state's display NAME with a space in it. Neither is an id and both are
+   legitimate, so the guard is a character filter rather than a naming
+   convention — the honest rule is what a value may CONTAIN, not what it is
+   called. On every value the app produces today jsId is the identity
+   function, which is the point: it costs nothing now and it holds when
+   somebody later interpolates something that did not come from safeId(). */
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+function jsId(s){ return String(s==null?"":s).replace(/[^A-Za-z0-9 _.:\/-]/g, ""); }
 /* Notes are full of links they found. Split the RAW text on URLs and escape
    each piece separately — never regex over already-escaped text, which is how
    the earlier stored-XSS hole opened (an id flowed into an attribute unescaped).
@@ -828,7 +855,7 @@ function deny(kind, ev){
 
 function delBtn(kind, id){
   if (!canWrite()) return "";
-  return '<button id="del-' + id + '" onclick="armDelete(\'' + kind + '\',\'' + id +
+  return '<button id="del-' + jsId(id) + '" onclick="armDelete(\'' + jsId(kind) + '\',\'' + jsId(id) +
     '\',event)" style="border:0;background:none;font:inherit;font-size:12px;' +
     'color:#a49a8e;cursor:pointer;padding:4px 0">Delete</button>';
 }
@@ -877,7 +904,7 @@ function loadToday(){
       if (t.check_out_time) line += " &middot; out " + esc(t.check_out_time);
       else if (t.check_out_date) line += " &middot; until " + fmtShort(t.check_out_date);
       tonight = '<h2>' + when + '</h2><div class="card' + (t.actual ? '' : ' tapme') + '"' +
-        (t.actual ? '' : ' onclick="loadRes(\'' + t.id + '\')"') + '>' +
+        (t.actual ? '' : ' onclick="loadRes(\'' + jsId(t.id) + '\')"') + '>' +
         '<div class="row"><b>' + esc(t.name) + '</b>' +
         (t.place_name ? '<span class="muted">' + esc(t.place_name) + '</span>' : '') + '</div>' +
         (line ? '<p class="muted" style="margin:7px 0 0">' + line + '</p>' : '') +
@@ -989,7 +1016,7 @@ function loadToday(){
           var a = (-90 + i*60) * Math.PI/180, R = 36;
           var x = (50 + R*Math.cos(a)).toFixed(2), y = (50 + R*Math.sin(a)).toFixed(2);
           return '<button class="dialbtn" id="dial-'+k+'" style="left:'+x+'%;top:'+y+'%" ' +
-            'onclick="'+act+'" ontouchstart="promptFor(\''+k+'\')" ' +
+            'onclick="'+act+'" ontouchstart="promptFor(\''+jsId(k)+'\')" ' +
             'onmouseenter="promptFor(\''+k+'\')">' +
             '<span class="ic">'+ic+'</span><span class="lb">'+KLABEL[k]+'</span></button>';
         }).join("") +
@@ -1088,7 +1115,7 @@ function openStop(){
     '<h1>What kind of stop?</h1><p class="sub">' + fmtTime(new Date().toISOString()) +
     ' &middot; recorded automatically</p><div class="grid">' +
     ["gas","food","campsite","lodging","event","observation"].map(function(k){
-      return '<div class="kind" onclick="saveStop(\''+k+'\')"><span class="ic">'+ICON[k]+
+      return '<div class="kind" onclick="saveStop(\''+jsId(k)+'\')"><span class="ic">'+ICON[k]+
              '</span><span class="lb">'+k.charAt(0).toUpperCase()+k.slice(1)+'</span></div>';
     }).join("") +
     '</div><p class="tiny" style="margin-top:16px">One tap is enough. Everything else is optional and can wait until tonight.</p>';
@@ -1136,9 +1163,9 @@ function saveStop(kind){
       '<h1 style="margin-top:14px">'+kind.charAt(0).toUpperCase()+kind.slice(1)+' stop saved</h1>' +
       '<p class="sub">'+fmtTime(item.occurred_at)+'</p></div>' +
       '<h2>Add anything? (optional)</h2>' + extra +
-      '<div class="actionbar"><button class="bigbtn" onclick="finishStop(\''+id+'\')">Done</button>' +
+      '<div class="actionbar"><button class="bigbtn" onclick="finishStop(\''+jsId(id)+'\')">Done</button>' +
       '<button class="ghostbtn" id="disc-btn" style="color:#a8332a;border-color:#e8cdc9" ' +
-        'onclick="armDiscard(\''+id+'\')">Discard this stop</button></div>';
+        'onclick="armDiscard(\''+jsId(id)+'\')">Discard this stop</button></div>';
     LAST_REC = { id: id, kind: kind, at: item.occurred_at };
   }
 
@@ -1317,7 +1344,7 @@ function loadTrip(){
       // The night that ENDED this day, on the day it began — so the row reads
       // "…and then they slept at Medora campground."
       if (x.slept && x.slept.place) bits.push("&#127957; " + esc(x.slept.place));
-      return '<div class="day" onclick="loadDay(\'' + x.date + '\',\'trip\')">' +
+      return '<div class="day" onclick="loadDay(\'' + jsId(x.date) + '\',\'trip\')">' +
         '<div class="daynum"><b>'+x.day_number+'</b><small>'+fmtShort(x.date)+'</small></div>' +
         '<div style="flex:1"><div class="row"><b>'+esc(x.title||(x.places?x.places:"On the road"))+
         '</b><span class="tiny">'+(x.miles!=null?x.miles+" mi":"")+'</span></div>' +
@@ -1339,7 +1366,7 @@ function loadTrip(){
 
     function placeRow(p, faded){
       return '<div class="day"' + (faded ? ' style="opacity:.55"' : '') +
-        ' onclick="loadPlace(\'' + p.id + '\',\'trip\')">' +
+        ' onclick="loadPlace(\'' + jsId(p.id) + '\',\'trip\')">' +
         '<div class="daynum"><b>&middot;</b><small>' +
           (p.planned_arrival ? fmtShort(p.planned_arrival) : '&mdash;') + '</small></div>' +
         '<div style="flex:1"><div class="row"><b>'+esc(p.name)+'</b>' +
@@ -1424,7 +1451,7 @@ function loadDay(date, from){
     }).join("");
     // Derived from where the car stopped — nothing to add or remove by hand.
     var placeRows = (d.places||[]).map(function(p){
-      return '<div class="card tapme" onclick="loadPlace(\''+esc(p.id)+'\',\'trip\')">' +
+      return '<div class="card tapme" onclick="loadPlace(\''+jsId(p.id)+'\',\'trip\')">' +
         '<div class="row"><span>&#128205; '+esc(p.name)+'</span><span></span></div></div>';
     }).join("");
     el("s-day").innerHTML =
@@ -1557,7 +1584,7 @@ function loadBadges(){
        posters would have made it unreadable. One tile, five feeders. */
     function tile(kind, key, art, name, sub, locked){
       return '<div class="btile'+(locked?' locked':'')+'" ' +
-        'onclick="openBadge(\'' + kind + '\',\'' + esc(String(key)) + '\')">' +
+        'onclick="openBadge(\'' + jsId(kind) + '\',\'' + jsId(key) + '\')">' +
         '<div class="art">'+art+'</div>' +
         '<div class="bname">'+esc(name)+'</div>' +
         (sub ? '<div class="bsub">'+sub+'</div>' : '') + '</div>';
@@ -1691,9 +1718,9 @@ function openBadge(kind, key){
       (b.note?'<p style="margin:0 0 14px;font-size:15px;line-height:1.5">'+esc(b.note)+'</p>':'') +
       badgeFacts([["Given", fmtShort(b.created_at.slice(0,10))]]) +
       (mine ? '<div class="row" style="margin-top:16px;gap:10px">' +
-        '<button class="ghostbtn" style="margin:0;flex:1" onclick="editBadge(\''+esc(key)+'\')">Edit</button>' +
+        '<button class="ghostbtn" style="margin:0;flex:1" onclick="editBadge(\''+jsId(key)+'\')">Edit</button>' +
         '<button class="ghostbtn" id="del-'+esc(key)+'" style="margin:0;flex:1" ' +
-          'onclick="armDelete(\'badge\',\''+esc(key)+'\',event)">Delete</button></div>'
+          'onclick="armDelete(\'badge\',\''+jsId(key)+'\',event)">Delete</button></div>'
         : '') +
       '<div id="bd-edit"></div>';
     return;
@@ -1791,8 +1818,8 @@ function editBadge(id){
     '<textarea id="be-note-'+id+'" style="min-height:64px;margin-top:8px" ' +
       'placeholder="What earned it?">'+esc(b.note||"")+'</textarea>' +
     '<div class="row" style="margin-top:8px;gap:8px">' +
-      '<button class="ghostbtn" style="margin:0;flex:1" onclick="saveBadge(\''+id+'\')">Save</button>' +
-      '<button class="ghostbtn" style="margin:0;flex:1" onclick="openBadge(\'bespoke\',\''+id+'\')">Cancel</button></div>';
+      '<button class="ghostbtn" style="margin:0;flex:1" onclick="saveBadge(\''+jsId(id)+'\')">Save</button>' +
+      '<button class="ghostbtn" style="margin:0;flex:1" onclick="openBadge(\'bespoke\',\''+jsId(id)+'\')">Cancel</button></div>';
   var t = el("be-title-"+id); if (t) t.focus();
 }
 
@@ -1866,7 +1893,7 @@ function photoThumbHtml(p, from){
   var src = p.thumb_key ? "/photo/"+p.thumb_key : "/photo/"+p.r2_key;
   return '<img class="thumb" loading="lazy" src="'+esc(src)+'" ' +
     'style="width:100%;height:112px;border-radius:10px;object-fit:cover;cursor:pointer;background:#eceae6" ' +
-    'onclick="openPhoto(\''+esc(p.id)+'\',\''+esc(p.r2_key)+'\',\''+(from||"memories")+'\')">';
+    'onclick="openPhoto(\''+jsId(p.id)+'\',\''+jsId(p.r2_key)+'\',\''+jsId(from||"memories")+'\')">';
 }
 
 var PHOTO_META = {};
@@ -1954,7 +1981,7 @@ function openPhoto(id, key, from){
       (p.lat != null ? '<button class="ghostbtn" style="margin:0;padding:4px 10px" ' +
         'onclick="tab(\'map\')">On the map</button> ' : '') +
       (canWrite()
-        ? '<button id="del-'+esc(id)+'" onclick="armDelete(\'photo\',\''+esc(id)+'\',event)" ' +
+        ? '<button id="del-'+jsId(id)+'" onclick="armDelete(\'photo\',\''+jsId(id)+'\',event)" ' +
           'style="border:0;background:none;font:inherit;font-size:12px;color:#a49a8e;' +
           'cursor:pointer;padding:4px 0">Delete</button>' : '') +
     '</span></div>' +
@@ -2102,7 +2129,7 @@ function loadPlace(id, from){
         (a.detail&&!a.done?'<span class="hers">'+esc(a.detail)+'</span>':'')+'</span></li>';
     }).join("");
     var res = d.reservations.map(function(r){
-      return '<div class="card tapme" onclick="loadRes(\''+r.id+'\',\'place\')"><div class="row"><span>'+esc(r.name)+
+      return '<div class="card tapme" onclick="loadRes(\''+jsId(r.id)+'\',\'place\')"><div class="row"><span>'+esc(r.name)+
         '</span><b>'+(r.cost!=null?'$'+r.cost.toFixed(2):'')+'</b></div>' +
         '<p class="tiny" style="margin:6px 0 0">'+(r.booked?'Booked':'Not booked')+'</p></div>';
     }).join("");
@@ -2437,7 +2464,7 @@ function basemapOverlays(map, d){
      260px card that is already under the thumb; making the card itself the
      button removes the second aim entirely. */
   function openable(date, html, lat, lon, name){
-    return '<div class="popgo" onclick="loadDay(\''+esc(date)+'\',\'map\')">' + html +
+    return '<div class="popgo" onclick="loadDay(\''+jsId(date)+'\',\'map\')">' + html +
       '<div class="pophint">Open this day &rarr;</div></div>' +
       /* Outside the popgo wrapper: a link inside a div that navigates on click
          would fire both. */
@@ -2463,7 +2490,7 @@ function basemapOverlays(map, d){
     popupAt(f.geometry.coordinates,
       '<b>'+esc(f.properties.name)+'</b><br>' +
       '<button class="ghostbtn" style="margin-top:6px" ' +
-        'onclick="loadPlace(\''+esc(f.properties.id)+'\',\'map\')">Open the plan</button>');
+        'onclick="loadPlace(\''+jsId(f.properties.id)+'\',\'map\')">Open the plan</button>');
   });
   map.on("click", "place-labels", function(e){
     var f = e.features[0];
