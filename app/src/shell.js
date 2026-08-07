@@ -211,6 +211,13 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .popm{color:var(--ink-2);font-size:12px;margin-top:2px;line-height:1.35}
   .popq{margin:6px 0 0;font-size:13px;line-height:1.4;color:var(--ink)}
   .pophint{margin-top:8px;font-size:11.5px;color:var(--sun);font-weight:660}
+  /* The popup IS the button now. Padding so the hint has room inside the card,
+     and :active so a tap on a MapLibre popup feels like a tap on anything else
+     in the app. */
+  .popgo{cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .popgo:active{background:var(--tap)}
+  .popgo .pophint{padding:0 11px 11px}
+  .rtpop .popbody{padding-bottom:4px}
   .parkwall{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:11px;margin-bottom:11px}
   .parkposter{margin:0;background:var(--card);border:1px solid var(--line);border-radius:12px;
     overflow:hidden;box-shadow:0 2px 8px rgba(80,60,30,.10)}
@@ -1176,7 +1183,7 @@ function loadTrip(){
       });
       if (sl.length > 4) bits.push("+" + (sl.length - 4) + " more");
       if (x.photos) bits.push(x.photos + " photo" + (x.photos===1?"":"s"));
-      return '<div class="day" onclick="loadDay(\'' + x.date + '\')">' +
+      return '<div class="day" onclick="loadDay(\'' + x.date + '\',\'trip\')">' +
         '<div class="daynum"><b>'+x.day_number+'</b><small>'+fmtShort(x.date)+'</small></div>' +
         '<div style="flex:1"><div class="row"><b>'+esc(x.title||(x.places?x.places:"On the road"))+
         '</b><span class="tiny">'+(x.miles!=null?x.miles+" mi":"")+'</span></div>' +
@@ -1241,7 +1248,15 @@ function loadTrip(){
   });
 }
 
-function loadDay(date){
+/* Where the Day screen's back button goes. It was hardcoded to Trip, which was
+   right while Trip was the only way in. Map popups now open a day on ONE tap
+   instead of two, so arriving from the map is about to become common — and
+   backing out of it landed you on Trip with the nav still lit on Map. Same
+   origin-aware-back family QA closed for Place and Reservation; Day was the one
+   left, because until tonight it was hard to reach from anywhere else. */
+var DAY_FROM = "trip";
+function loadDay(date, from){
+  if (from) DAY_FROM = from;
   show("day");
   LAST_DAY = date;
   get("/api/day?date="+encodeURIComponent(date)).then(function(d){
@@ -1279,7 +1294,7 @@ function loadDay(date){
         '<div class="row"><span>&#128205; '+esc(p.name)+'</span><span></span></div></div>';
     }).join("");
     el("s-day").innerHTML =
-      '<button class="back" onclick="tab(\'trip\')">&larr;</button>' +
+      '<button class="back" onclick="tab(\''+DAY_FROM+'\')">&larr;</button>' +
       '<h1>Day '+(s.day_number||"")+'</h1><p class="sub">'+fmtDay(date)+
       (s.places?' &middot; '+esc(s.places):'')+'</p>' +
       '<div class="stats">' +
@@ -2251,22 +2266,24 @@ function basemapOverlays(map, d){
     layout:{ "icon-image":"pin-journal", "icon-size":pinSize, "icon-allow-overlap":true } });
 
   /* Everything on the map opens the thing it stands for. */
-  /* One popup at a time, and it remembers which pin it belongs to. Tapping a
-     pin shows the detail; tapping THE SAME pin again opens that day. Tapping a
-     different pin just moves the popup — otherwise the second tap becomes a
-     trapdoor wherever you happen to press next. */
-  var ARMED_PIN = null, POPUP = null;
+  /* One popup at a time. Tapping a pin shows the card; tapping the CARD opens
+     the day (see openable). */
+  var POPUP = null;
   function popupAt(coord, html){
     if (POPUP) { try { POPUP.remove(); } catch(e){} }
     POPUP = new maplibregl.Popup({ maxWidth:"260px", closeButton:true, className:"rtpop" })
       .setLngLat(coord).setHTML(html).addTo(map);
-    POPUP.on("close", function(){ ARMED_PIN = null; });
   }
-  /* Returns true when this is the second tap on the same pin. */
-  function pinTapped(key){
-    if (ARMED_PIN === key) { ARMED_PIN = null; return true; }
-    ARMED_PIN = key;
-    return false;
+  /* Tap the POPUP to open the day, not the pin a second time.
+     Tap-the-pin-again asked the finger to hit a 4.5px target twice, with the
+     popup that just appeared covering part of the map and no visible state to
+     say the pin was "armed" — so a miss silently re-armed a different pin, or
+     nothing happened at all. Andy: "that doesn't work well." The popup is a
+     260px card that is already under the thumb; making the card itself the
+     button removes the second aim entirely. */
+  function openable(date, html){
+    return '<div class="popgo" onclick="loadDay(\''+esc(date)+'\',\'map\')">' + html +
+      '<div class="pophint">Open this day &rarr;</div></div>';
   }
   function dayLine(date){
     var di = (d.day_index || {})[date];
@@ -2296,19 +2313,16 @@ function basemapOverlays(map, d){
   map.on("click", "vstop-dots", function(e){
     var f = e.features[0], pr = f.properties;
     // Derived stops carry no id, so the date and time identify the pin.
-    if (pinTapped("vs:" + pr.date + ":" + (pr.at || ""))) { loadDay(pr.date); return; }
-    popupAt(f.geometry.coordinates,
-      '<b>Car stopped here</b><br>' +
-      '<span style="font-size:12px;color:#666">' +
+    popupAt(f.geometry.coordinates, openable(pr.date,
+      '<div class="popbody"><div class="popt">Car stopped here</div>' +
+      '<div class="popm">' +
       (pr.ongoing ? 'Still there' : (pr.mins ? 'For ' + (pr.mins >= 60
         ? Math.floor(pr.mins/60) + 'h ' + (pr.mins%60) + 'm' : pr.mins + ' min') : '')) +
-      (pr.at ? ' &middot; ' + fmtTime(pr.at) : '') + '</span><br>' +
-      '<div class="pophint">Tap the pin again to open the day &rarr;</div>');
+      (pr.at ? ' &middot; ' + fmtTime(pr.at) : '') + '</div></div>'));
   });
   map.on("click", "stop-dots", function(e){
     var f = e.features[0], pr = f.properties;
-    if (pinTapped("st:" + pr.id)) { loadDay(pr.date); return; }
-    popupAt(f.geometry.coordinates,
+    popupAt(f.geometry.coordinates, openable(pr.date,
       '<div class="popbody">' +
         '<div class="popt">'+(ICON[pr.kind]||"")+' '+esc(pr.place || pr.kind)+'</div>' +
         '<div class="popm">'+dayLine(pr.date)+
@@ -2316,34 +2330,36 @@ function basemapOverlays(map, d){
           (wx(pr.weather_code)
             ? ' &middot; '+wx(pr.weather_code).icon+' '+degF(pr.temp_f) : '')+'</div>' +
         (dayPlace(pr.date) ? '<div class="popm">'+esc(dayPlace(pr.date))+'</div>' : '') +
-        '<div class="pophint">Tap the pin again to open the day &rarr;</div>' +
-      '</div>');
+      '</div>'));
   });
   map.on("click", "photo-pins", function(e){
     var f = e.features[0], pr = f.properties;
-    if (pinTapped("ph:" + pr.id)) { loadDay(pr.date); return; }
     var n = countOn(d.photos || [], pr.date);
-    popupAt(f.geometry.coordinates,
+    popupAt(f.geometry.coordinates, openable(pr.date,
       (pr.thumb ? '<img src="/photo/'+esc(pr.thumb)+'" class="popimg">' : '') +
       '<div class="popbody">' +
         '<div class="popt">'+dayLine(pr.date)+'</div>' +
         (dayPlace(pr.date) ? '<div class="popm">'+esc(dayPlace(pr.date))+'</div>' : '') +
-        '<div class="popm">'+(pr.author ? esc(pr.author)+' &middot; ' : '') +
-          fmtTime(pr.taken_at)+(n>1 ? ' &middot; '+n+' photos that day' : '')+'</div>' +
-        '<div class="pophint">Tap the pin again to open the day &rarr;</div>' +
-      '</div>');
+        /* Joined, not concatenated: an iMessage photo can arrive with no
+           author name and no EXIF timestamp, and the old form then rendered a
+           leading " · 39 photos that day". Seen in the wild on the very first
+           pin this popup was tested against. */
+        '<div class="popm">'+[
+          pr.author ? esc(pr.author) : '',
+          fmtTime(pr.taken_at),
+          n > 1 ? n + ' photos that day' : ''
+        ].filter(function(x){ return x; }).join(' &middot; ')+'</div>' +
+      '</div>'));
   });
   map.on("click", "journal-pins", function(e){
     var f = e.features[0], pr = f.properties;
-    if (pinTapped("jn:" + pr.id)) { loadDay(pr.date); return; }
-    popupAt(f.geometry.coordinates,
+    popupAt(f.geometry.coordinates, openable(pr.date,
       '<div class="popbody">' +
         '<div class="popt">'+dayLine(pr.date)+'</div>' +
         (dayPlace(pr.date) ? '<div class="popm">'+esc(dayPlace(pr.date))+'</div>' : '') +
         '<p class="popq">'+esc(pr.excerpt)+(pr.excerpt.length >= 120 ? '&hellip;' : '')+'</p>' +
         '<div class="popm">'+esc(pr.author||'')+'</div>' +
-        '<div class="pophint">Tap the pin again to open the day &rarr;</div>' +
-      '</div>');
+      '</div>'));
   });
   ["place-dots","place-labels","stop-dots","photo-pins","journal-pins","vstop-dots"].forEach(function(l){
     map.on("mouseenter", l, function(){ map.getCanvas().style.cursor = "pointer"; });
