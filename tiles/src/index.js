@@ -1,8 +1,9 @@
 /**
  * roadtrip-tiles — vector tile server backed by a .pmtiles archive in R2.
  *
- * GET /corridor/{z}/{x}/{y}.mvt   tile from corridor-z14.pmtiles (decompressed;
- *                                 the platform re-compresses on the wire)
+ * GET /corridor/{z}/{x}/{y}.mvt   tile from the basemap archive named by BASEMAP
+ *                                 below (decompressed; the platform re-compresses
+ *                                 on the wire). The path name is a fossil — see BASEMAP.
  * GET /style.json                 MapLibre style (stored as an R2 object)
  * GET /fonts/{stack}/{range}.pbf  self-hosted glyphs (R2: fonts/...)
  * GET /sprites/*                  self-hosted sprite sheet (R2: sprites/...)
@@ -20,6 +21,49 @@
 import { PMTiles } from "pmtiles";
 
 const ALLOWED_ORIGIN = "https://roadtripadventure.app";
+
+/**
+ * The archive the /corridor/ route reads.
+ *
+ * It is not a corridor any more. It was: a 30 km ribbon along the OSRM-routed
+ * trip, which was the right trade the day the map shipped — 995 MB instead of
+ * nine gigabytes, and no third-party key anywhere in the path. What it cost is
+ * measurable and was measured: probing north and south of where the car sat on
+ * 2026-08-07, the basemap went blank between ten and twenty miles either side
+ * of the road. Anywhere they went that Lily had not routed through — a hot
+ * spring somebody mentioned, a hospital, a friend's place, the long way round —
+ * the map was empty exactly when they needed to look at it.
+ *
+ * conus-z14 is the whole lower 48 plus the Vancouver leg (bbox
+ * -125.2,24.4,-66.9,50.0), z0-14, 8.95 GB, from the Protomaps 20260807 build.
+ *
+ * The ROUTE keeps its old name on purpose. style.json names this path, phones
+ * cache style.json, and renaming it would be a restyle rather than an object
+ * swap — which is the one thing this change is not allowed to be.
+ */
+const BASEMAP = "conus-z14.pmtiles";
+
+/**
+ * The cache key for a tile — the archive's name, then the tile's path.
+ *
+ * Tiles are cached at the edge for a year as `immutable`, and a tile the
+ * basemap does not have is cached too, as an empty 204. That is right while
+ * the archive is fixed and catastrophic the moment it is not: every tile
+ * anybody looked at while the corridor was the map would go on answering
+ * "nothing here" for a year after the map got bigger. Verified rather than
+ * feared — right after the CONUS archive went live, Missoula rendered and
+ * Miami did not, and the only difference between them was that Miami had been
+ * probed an hour earlier and Missoula had not.
+ *
+ * Putting the archive name IN the key means swapping the archive IS the
+ * invalidation. Nobody has to remember to purge, and nobody can forget. The
+ * PUBLIC url is untouched — this is the Worker's private key, so style.json
+ * and every phone's cached copy of it stay exactly as they are.
+ */
+function tileCacheKey(request) {
+  const u = new URL(request.url);
+  return new Request(u.origin + "/__ck/" + BASEMAP + u.pathname, { method: "GET" });
+}
 
 class R2Source {
   constructor(env, key) { this.env = env; this.key = key; }
@@ -76,24 +120,28 @@ export default {
       const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
       if (z > 14) return notFound("z14 max");
       const cache = caches.default;
-      const hit = await cache.match(request);
+      const ck = tileCacheKey(request);
+      const hit = await cache.match(ck);
       if (hit) return hit;
       let t;
       try {
-        t = await archive(env, "corridor-z14.pmtiles").getZxy(z, x, y);
-        // Off-corridor at national zooms: fall back to the US-wide z0-8
-        // archive so the fit view has no bald rectangle where the corridor
-        // doesn't reach (the "gray box"). Above z8 off-corridor stays empty
-        // on purpose — the corridor is the map.
+        t = await archive(env, BASEMAP).getZxy(z, x, y);
+        /* Outside the extract's bounding box the low zooms still need
+           something, or the fit view gets a bald rectangle where the basemap
+           does not reach. A z5 tile covering eastern Canada does not intersect
+           the CONUS box and comes back empty; us-z8.pmtiles is 53 MB and
+           answers it. Kept deliberately after the CONUS swap — it no longer
+           has anything to do with the corridor, it is the edge of the map. */
         if ((!t || !t.data) && z <= 8)
           t = await archive(env, "us-z8.pmtiles").getZxy(z, x, y);
       }
       catch (e) { return new Response("tile error: " + e.message, { status: 500, headers: cors }); }
       if (!t || !t.data) {
-        // Off-corridor tile: empty 204 keeps MapLibre quiet instead of erroring.
+        // Tile the basemap does not have: an empty 204 keeps MapLibre quiet
+        // instead of erroring. Keyed by archive, so it expires when the map grows.
         const empty = new Response(null, { status: 204, headers: {
           "cache-control": "public, max-age=31536000, immutable", ...cors } });
-        ctx.waitUntil(cache.put(request, empty.clone()));
+        ctx.waitUntil(cache.put(ck, empty.clone()));
         return empty;
       }
       const resp = new Response(t.data, {
@@ -103,7 +151,7 @@ export default {
           ...cors,
         },
       });
-      ctx.waitUntil(cache.put(request, resp.clone()));
+      ctx.waitUntil(cache.put(ck, resp.clone()));
       return resp;
     }
 
