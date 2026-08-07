@@ -130,7 +130,7 @@ async function tripMeta(env) {
   return env.roadtrip.prepare("SELECT * FROM trip_meta WHERE id = 1").first();
 }
 
-import { currentAt, alertsAt, archiveAt, attachToStop } from "./weather.js";
+import { currentAt, alertsAt, attachToStop } from "./weather.js";
 
 /* ------------------------------------------------------------- nights slept */
 /**
@@ -1596,7 +1596,7 @@ export async function createStop(env, person, body, ctx) {
      reading. */
   const stopAgeMs = Math.abs(Date.now() - new Date(at).getTime());
   if (ctx && lat != null && lon != null && stopAgeMs < 45 * 60000) {
-    ctx.waitUntil(currentAt(lat, lon).then((w) => attachToStop(env, id, w)).catch(() => {}));
+    ctx.waitUntil(currentAt(lat, lon).then((w) => attachToStop(env, id, w, offset)).catch(() => {}));
   }
 
   return json({ ok: true, id });

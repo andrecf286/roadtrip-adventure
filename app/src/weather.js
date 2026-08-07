@@ -215,8 +215,15 @@ export async function alertsAt(lat, lon) {
 /**
  * Write a reading onto a stop. Separate from the fetch so the caller decides
  * whether it is awaited (backfill) or fired into waitUntil (the live path).
+ *
+ * `tzOffset` is the stop's own offset, and it is what makes weather_at a real
+ * instant. Both providers answer timezone=auto — a naive local wall clock with
+ * no zone on it, which is right for reading and wrong for storing beside
+ * occurred_at, which is UTC. The viewbook will subtract one from the other;
+ * two clocks in one table is a number that looks fine and is hours out. The
+ * conversion happens here, once, at the only place that writes the column.
  */
-export async function attachToStop(env, stopId, w) {
+export async function attachToStop(env, stopId, w, tzOffset) {
   if (!w) return false;
   /* AND weather_at IS NULL: the insert is idempotent (the offline queue
      retries), but this write never was — a retry hours later would replace a
@@ -226,6 +233,7 @@ export async function attachToStop(env, stopId, w) {
                      humidity = ?, weather_at = ?
       WHERE id = ? AND weather_at IS NULL`
   ).bind(w.code ?? null, w.temp_f ?? null, w.feels_f ?? null,
-         w.wind_mph ?? null, w.humidity ?? null, w.at ?? null, stopId).run();
+         w.wind_mph ?? null, w.humidity ?? null,
+         localToInstant(w.at ?? null, tzOffset), stopId).run();
   return true;
 }
