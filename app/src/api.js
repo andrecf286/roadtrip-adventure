@@ -134,17 +134,34 @@ async function liveExtraMiles(env) {
 /** The car's position at a moment, from the breadcrumb nearest in time —
     within a tolerance, else null. This is what locates a photo whose EXIF
     GPS was stripped (iOS web uploads) but whose timestamp survived. */
-async function positionAt(env, iso, toleranceMin) {
+/**
+ * Where the car was at an instant.
+ *
+ * `parkedOnly` is for callers whose instant is a GUESS rather than a reading —
+ * a photo with no EXIF offset, timestamped with when it was forwarded rather
+ * than when it was taken. Interpolating a moving car's position at a guessed
+ * moment produces a pin that looks exactly as authoritative as a real one and
+ * is wrong by however long the forward sat in someone's thread. Parked is the
+ * case where being hours out costs nothing: the car sat at that campground all
+ * evening, so any moment inside the gap gives the same answer. When the car
+ * was moving, this returns null and the photo simply carries no pin.
+ *
+ * It also skips the ORDER BY ABS(...) scan over every breadcrumb, which is the
+ * expensive half of this function.
+ */
+async function positionAt(env, iso, toleranceMin, parkedOnly) {
   const t = new Date(iso).getTime();
   if (!t) return null;
   // `nearest`, not `near`: near() is the module-level disc predicate, and a
   // local binding of that name would hand the next person a D1 row where they
   // expected a function.
-  const nearest = await env.roadtrip.prepare(
-    `SELECT lat, lon, ts FROM track_points
-      ORDER BY ABS(strftime('%s', ts) - strftime('%s', ?)) LIMIT 1`).bind(iso).first();
-  if (nearest && Math.abs(new Date(nearest.ts).getTime() - t) / 60000 <= toleranceMin)
-    return { lat: nearest.lat, lon: nearest.lon };
+  if (!parkedOnly) {
+    const nearest = await env.roadtrip.prepare(
+      `SELECT lat, lon, ts FROM track_points
+        ORDER BY ABS(strftime('%s', ts) - strftime('%s', ?)) LIMIT 1`).bind(iso).first();
+    if (nearest && Math.abs(new Date(nearest.ts).getTime() - t) / 60000 <= toleranceMin)
+      return { lat: nearest.lat, lon: nearest.lon };
+  }
   // No breadcrumb near in TIME usually means the car was PARKED (breadcrumbs
   // only flow while driving). If the moment falls between one trip's end and
   // the next trip's start, the car sat at the earlier trip's last position —
@@ -956,8 +973,13 @@ export async function ingestPhoto(env, request) {
 
   let lat = form.get("lat") ? Number(form.get("lat")) : null;
   let lon = form.get("lon") ? Number(form.get("lon")) : null;
-  if (lat == null && form.get("backfill") === "1") {
-    const p = await positionAt(env, takenAt, 20);
+  /* Two grades of backfill. "1" means the caller has a real capture instant
+     and the car's position at that instant is the answer. "parked" means the
+     instant is a send-time guess — place it only if the car was stationary,
+     where being hours out costs nothing. See positionAt. */
+  const bf = (form.get("backfill") || "").toString();
+  if (lat == null && bf) {
+    const p = await positionAt(env, takenAt, 20, bf === "parked");
     if (p) { lat = p.lat; lon = p.lon; }
   }
 
@@ -985,7 +1007,10 @@ export async function ingestPhoto(env, request) {
          (thumb && typeof thumb !== "string") ? thumbKey : null,
          sha, (form.get("caption") || "").toString().slice(0, 300) || null,
          authorId, nowIso()).run();
-  return json({ ok: true, id, lat, lon, placed: lat != null ? (form.get("lat") ? "exif" : "track") : "none" });
+  return json({ ok: true, id, lat, lon,
+    placed: lat == null ? "none"
+          : form.get("lat") ? "exif"
+          : bf === "parked" ? "parked" : "track" });
 }
 
 /** Upload one photo: multipart form with `file` (resized JPEG), `thumb`
@@ -1062,6 +1087,40 @@ export async function servePhoto(env, path) {
 
 /** Remove a photo (any author, same rule as journal deletes): DB row first,
     then both R2 objects — a dangling object is better than a dangling row. */
+/** The six, for the author picker. Names only — no tokens, no handles, nothing
+    that isn't already on every photo card in the app. */
+export async function people(env) {
+  const rows = await env.roadtrip.prepare(
+    `SELECT id, name, role FROM person ORDER BY role DESC, name`).all();
+  return json({ people: rows.results });
+}
+
+/** Reassign a photo's author.
+
+    The iMessage puller credits whoever SENT the message, which for a forwarded
+    photo is the forwarder, not the photographer — and Ada's thread with her
+    mother never reaches the Mac doing the pulling, so the original is simply
+    not in the data. No rule recovers it. The correlation that exists (Ada's
+    camera writes GPS, Lily's does not) is a phone setting either could change
+    without telling anyone, at which point a heuristic would keep answering
+    confidently and be wrong.
+
+    So the model does not guess: the people who were in the car say who took
+    it. Author-gated like every other write here — Lily, Ada and Andy. */
+export async function updatePhoto(env, person, body) {
+  if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
+  if (!body.id) return json({ error: "id required" }, 400);
+  if (!body.author_id) return json({ error: "author_id required" }, 400);
+  const who = await env.roadtrip
+    .prepare(`SELECT id FROM person WHERE id = ?`).bind(body.author_id).first();
+  if (!who) return json({ error: "unknown author_id" }, 400);
+  const r = await env.roadtrip
+    .prepare(`UPDATE photo SET author_id = ? WHERE id = ?`)
+    .bind(body.author_id, body.id).run();
+  if (!r.meta.changes) return json({ error: "not found" }, 404);
+  return json({ ok: true, id: body.id, author_id: body.author_id });
+}
+
 export async function deletePhoto(env, person, body) {
   if (!person || person.role !== "author") return json({ error: "authors only" }, 403);
   if (!body.id) return json({ error: "id required" }, 400);
