@@ -1966,9 +1966,8 @@ function openPhoto(id, key, from){
   if (!v) return;
   v.innerHTML = '<div class="card" style="padding:8px">' +
     '<img src="/photo/'+esc(key)+'" style="width:100%;border-radius:10px;background:#eceae6">' +
-    '<div class="row" style="margin-top:8px"><span class="tiny">' +
-      esc(p.author||"") + (p.taken_at ? ' &middot; '+fmtTime(p.taken_at) : '') +
-      (p.date ? ' &middot; '+fmtShort(p.date) : '') + '</span>' +
+    '<div class="row" style="margin-top:8px"><span class="tiny" id="phby-'+jsId(id)+'">' +
+      authorLineHtml(id) + '</span>' +
     '<span>' +
       (p.lat != null ? '<button class="ghostbtn" style="margin:0;padding:4px 10px" ' +
         'onclick="tab(\'map\')">On the map</button> ' : '') +
@@ -1979,6 +1978,88 @@ function openPhoto(id, key, from){
     '</span></div>' +
     '<button class="ghostbtn" onclick="this.parentNode.parentNode.innerHTML=\'\'">Close</button></div>';
   v.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* ---- who took it ---------------------------------------------------------
+   The puller can only see who SENT the message. A photo Ada texted to Amelia
+   arrives on this Mac as Amelia's, because the original never touches it —
+   Ada's thread with her mother is not on Andy's machine. Nothing in the data
+   recovers the photographer, and the one signal that correlates (Ada's camera
+   geotags, Lily's does not) is a Location Services toggle either of them could
+   flip tomorrow, after which the app would quietly start lying.
+   So this is a button, not an inference. The people who were there fix it.
+
+   ONE function builds this line, used by the viewer, by Cancel, and by Save —
+   three copies of it would drift, and the middle one would be the one nobody
+   looked at again. */
+function authorLineHtml(id){
+  var p = PHOTO_META[id] || {};
+  return esc(p.author||"") +
+    (p.taken_at ? ' &middot; '+fmtTime(p.taken_at) : '') +
+    (p.date ? ' &middot; '+fmtShort(p.date) : '') +
+    (canWrite()
+      ? ' &middot; <button id="phwho-'+jsId(id)+'" onclick="editAuthor(\''+jsId(id)+'\')" ' +
+        'style="border:0;background:none;font:inherit;font-size:12px;color:#a49a8e;' +
+        'cursor:pointer;padding:0;text-decoration:underline">whose?</button>'
+      : '');
+}
+
+var PEOPLE_CACHE = null;
+
+function editAuthor(id){
+  var span = el("phby-" + id);
+  if (!span) return;
+  function draw(people){
+    var p = PHOTO_META[id] || {};
+    var opts = people.map(function(x){
+      return '<option value="'+esc(x.id)+'"'+(x.name === p.author ? ' selected' : '')+'>'+
+             esc(x.name)+'</option>';
+    }).join("");
+    span.innerHTML = '<select id="phsel-'+jsId(id)+'" style="font:inherit;font-size:12px">'+opts+'</select> '+
+      '<button id="phsave-'+jsId(id)+'" onclick="saveAuthor(\''+jsId(id)+'\')" '+
+        'style="border:0;background:none;font:inherit;font-size:12px;color:#3f6f4f;'+
+        'cursor:pointer;padding:0 8px">Save</button>'+
+      '<button onclick="cancelAuthor(\''+jsId(id)+'\')" '+
+        'style="border:0;background:none;font:inherit;font-size:12px;color:#a49a8e;'+
+        'cursor:pointer;padding:0">Cancel</button>';
+  }
+  if (PEOPLE_CACHE) { draw(PEOPLE_CACHE); return; }
+  span.innerHTML = '<span class="tiny">loading names&hellip;</span>';
+  get("/api/people").then(function(d){
+    if (!d || !d.people) {
+      /* Offline or a dead cookie. Put the line back rather than stranding the
+         user in a half-open editor with no way out. */
+      span.innerHTML = authorLineHtml(id);
+      return;
+    }
+    PEOPLE_CACHE = d.people;
+    draw(PEOPLE_CACHE);
+  });
+}
+
+function cancelAuthor(id){
+  var span = el("phby-" + id);
+  if (span) span.innerHTML = authorLineHtml(id);
+}
+
+function saveAuthor(id){
+  var sel = el("phsel-" + id), span = el("phby-" + id);
+  if (!sel || !span) return;
+  var who = sel.value, btn = el("phsave-" + id);
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  send("/api/photo", "PATCH", { id: id, author_id: who }).then(function(r){
+    if (!r || !r.ok) {
+      /* A write that fails should say so, not sit there. */
+      if (btn) { btn.disabled = false; btn.textContent = "Save"; }
+      var e = el("phsel-" + id);
+      if (e) e.insertAdjacentHTML("afterend",
+        '<span class="tiny" style="color:#9a5b4a"> couldn\'t save</span>');
+      return;
+    }
+    var hit = (PEOPLE_CACHE || []).filter(function(x){ return x.id === who; })[0];
+    if (PHOTO_META[id]) PHOTO_META[id].author = hit ? hit.name : who;
+    span.innerHTML = authorLineHtml(id);
+  });
 }
 
 /* Minimal EXIF walk: JPEG APP1 -> TIFF -> GPS IFD. Returns {lat, lon,
@@ -2012,11 +2093,26 @@ function exifGps(buf){
       if (tag === 0x8769) exifOff = u32(e + 8);
     });
     if (exifOff) ifdEntries(t + exifOff, function(e){
-      if (u16(e) === 0x9003) { // DateTimeOriginal "YYYY:MM:DD HH:MM:SS"
+      var tg = u16(e);
+      if (tg === 0x9003) { // DateTimeOriginal "YYYY:MM:DD HH:MM:SS"
         var p = t + u32(e + 8), s = "";
         for (var i = 0; i < 19; i++) s += String.fromCharCode(v.getUint8(p + i));
         var m = s.match(/^(\d{4}):(\d\d):(\d\d) (\d\d:\d\d:\d\d)$/);
         if (m) out.taken_local = m[1]+"-"+m[2]+"-"+m[3]+"T"+m[4];
+      }
+      /* OffsetTimeOriginal (0x9011), or OffsetTime (0x9010) as second choice.
+         DateTimeOriginal alone is a WALL CLOCK, not an instant — it says 6:41
+         and not which 6:41. This tag is what completes it, and reading it is
+         the difference between a photo landing where it was taken and landing
+         wherever the uploader's own clock implied. iOS 13+ writes it.
+         Both are ASCII "+HH:MM", 7 bytes with the NUL, so the value is always
+         a pointer rather than inline. */
+      if (tg === 0x9011 || tg === 0x9010) {
+        var q = t + u32(e + 8), o = "";
+        for (var j = 0; j < 6; j++) o += String.fromCharCode(v.getUint8(q + j));
+        if (/^[+-]\d\d:\d\d$/.test(o)) {
+          if (tg === 0x9011) out.offset_orig = o; else out.offset = o;
+        }
       }
     });
     if (gpsOff) {
@@ -2080,10 +2176,23 @@ function uploadPhotos(files){
           fd.append("thumb", blobs[1], "t.jpg");
           fd.append("sha256", sha);
           fd.append("client_id", "ph" + sha.slice(0, 40));
-          fd.append("tz_offset", tzOffset());
-          // EXIF local time + the phone's offset beats file mtime; mtime beats now.
+          /* The offset must come from the CAMERA, never from this browser.
+             tzOffset() is right for a journal entry — the person writing it is
+             here, now. It is wrong for a photograph, which was taken somewhere
+             else by someone else. Stamping the uploader's zone is what put
+             fifteen photos into the app two hours early, five of them then
+             backfilled against the car's position at a moment it had already
+             driven past, landing two miles up the road from their twins.
+             Order of trust: the frame's own OffsetTimeOriginal, then the car's
+             zone (TODAY_TZ, read off its own breadcrumbs) — because a photo in
+             THIS app was almost certainly taken where the car is, not where the
+             person uploading it happens to be sitting. */
+          var capOff = meta.offset_orig || meta.offset || null;        // "-06:00"
+          var offCompact = capOff ? capOff.replace(":", "") : TODAY_TZ; // "-0600"
+          var offColon = offCompact.replace(/^([+-]\d\d)(\d\d)$/, "$1:$2");
+          fd.append("tz_offset", offCompact);
           fd.append("taken_at", meta.taken_local
-            ? meta.taken_local + tzOffset().replace(/(\d\d)(\d\d)/, "$1:$2")
+            ? meta.taken_local + offColon
             : new Date(f.lastModified || Date.now()).toISOString());
           if (meta.lat != null) { fd.append("lat", meta.lat); fd.append("lon", meta.lon); }
           return fetch("/api/photo/upload", { method: "POST", credentials: "same-origin", body: fd })
