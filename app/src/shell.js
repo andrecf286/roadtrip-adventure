@@ -48,6 +48,10 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .live{display:inline-flex;align-items:center;gap:6px;background:var(--road-soft);color:var(--road);
     font-size:12px;font-weight:600;padding:5px 10px;border-radius:99px;margin-bottom:12px}
   .live.parked{background:#f1eee9;color:var(--ink-3)}
+  /* Amber, not red. Contact lost usually means a canyon, and the four people
+     reading this at 6am are the girls' parents — the line should be legible,
+     not alarming. It carries the age, which is the actual information. */
+  .live.lost{background:#f6ece4;color:#9a5b4a}
   .dot{width:7px;height:7px;border-radius:50%;background:currentColor;animation:p 2s infinite}
   @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
   .stats{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin:16px 0 4px}
@@ -495,6 +499,53 @@ function fmtLong(ds){
 }
 function fmtDay(ds){ if(!ds) return ""; var d=new Date(ds+"T12:00:00");
   return d.toLocaleDateString([], {weekday:"long", month:"long", day:"numeric"}); }
+/* How long ago, in the shortest true form. "14h" beats "840 minutes" and both
+   beat a green dot that says Parked. */
+function fmtAgo(min){
+  if (min == null) return "";
+  if (min < 1)    return "just now";
+  if (min < 60)   return Math.round(min) + " min ago";
+  if (min < 2880) return Math.round(min/60) + "h ago";
+  return Math.round(min/1440) + " days ago";
+}
+
+/* ONE function decides what the live line says, because there are two of them
+   on two screens and they must never disagree about whether the girls are fine.
+
+   Three states, not two. The old code was a single ternary on d.moving, and
+   on 2026-08-08 that rendered a calm grey "Parked" beside a town outside Cody
+   for fifteen hours while the car was in fact driving into Yellowstone and had
+   simply stopped being able to say so. Breadcrumbs only flow while the engine
+   runs, so silence and stillness look identical from age alone — but the server
+   knows whether Bouncie left a trip OPEN, which means the engine was running
+   when the reporting stopped. That is the contact_lost flag, and it is the
+   worth interrupting somebody's morning for.
+
+   Returns {colour, dot, text} so each caller keeps its own markup. */
+function liveState(d){
+  if (d.moving)
+    return { colour:"#1f6f5c", text:"Moving &middot; " + d.speed + " mph", cls:"" };
+  var f = d.fix || null;
+  var viaCar = !f || f.source === "bouncie";
+  /* Another source answering comes FIRST, before contact_lost. If the inReach
+     or a phone reported four minutes ago, "No signal" is false — the car's
+     tracker is dark but we know exactly where they are, and that is the thing
+     the reader wants. Say who is answering and when; a pin from a phone is not
+     the same claim as a pin from the tracker. */
+  if (!viaCar)
+    return { colour:"#7a6a55",
+             text:esc(f.subject || f.source) + " &middot; " + fmtAgo(f.age_min),
+             cls:" parked" };
+  if (d.contact_lost)
+    return { colour:"#9a5b4a",
+             text:"No signal &middot; last heard " + fmtAgo(f && f.age_min),
+             cls:" lost" };
+  if (f && f.age_min != null && f.age_min > 180)
+    return { colour:"#a49a8e", text:"Parked &middot; last heard " + fmtAgo(f.age_min),
+             cls:" parked" };
+  return { colour:"#a49a8e", text:"Parked", cls:" parked" };
+}
+
 function fmtShort(ds){ if(!ds) return ""; var d=new Date(ds+"T12:00:00");
   return d.toLocaleDateString([], {month:"short", day:"numeric"}); }
 /* Andy's words, lightly corrected. "Click" became "tap" — this app has only
@@ -894,9 +945,8 @@ function loadToday(){
     var mpg = d.mpg ? '<div class="stat"><span>'+d.mpg.value+'</span><small>mpg</small>'+
         '<span class="qual">'+esc(d.mpg.method)+'</span></div>'
       : '<div class="stat"><span>&mdash;</span><small>mpg</small><span class="qual">needs two fills</span></div>';
-    var live = d.moving
-      ? '<div class="live"><span class="dot"></span> Moving &middot; '+d.speed+' mph</div>'
-      : '<div class="live parked"><span class="dot"></span> Parked</div>';
+    var ls = liveState(d);
+    var live = '<div class="live'+ls.cls+'"><span class="dot"></span> '+ls.text+'</div>';
     var t = d.tonight;
     var tonight = "";
     if (t) {
@@ -935,9 +985,8 @@ function loadToday(){
     // whether the wheels are turning — then the trip totals. The old stat
     // boxes and Days Out are gone; nobody marks places anymore (the car
     // stopping is the record), so the mark-it affordance is gone too.
-    var state = d.moving
-      ? '<span style="color:#1f6f5c">&#9679;</span> Moving &middot; '+d.speed+' mph'
-      : '<span style="color:#a49a8e">&#9679;</span> Parked';
+    var ls2 = liveState(d);
+    var state = '<span style="color:'+ls2.colour+'">&#9679;</span> '+ls2.text;
     /* Live conditions ride on l1, which is the where-they-are-right-now line —
        day, town, miles today, moving or parked. The temperature belongs with
        those and not with the cumulative totals underneath. */
