@@ -119,6 +119,12 @@ export default {
       if (request.method !== "POST") return json({ error: "POST only" }, 405);
       return api.ingestPhoto(env, request);
     }
+    // Positions from anything that is not the car's own tracker: the inReach
+    // poller, a native companion, or Andy by hand. Same secret-gated door.
+    if (path === "/api/ingest/position") {
+      if (request.method !== "POST") return json({ error: "POST only" }, 405);
+      return api.ingestPosition(env, request);
+    }
     if (path === "/api/badge/upload") {
       if (!person) return json({ error: "unauthorized" }, 401);
       return api.uploadBadge(env, person, request);

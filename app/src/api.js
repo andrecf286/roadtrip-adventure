@@ -318,6 +318,49 @@ export async function today(env) {
     .prepare(`SELECT ts, lat, lon, speed, fuel_level FROM track_points ORDER BY ts DESC LIMIT 1`)
     .first();
 
+  /* ---- where are they, and how sure are we -----------------------------
+     The old rule was one line — "a stale last point means parked, not broken"
+     — and on 2026-08-08 it told four parents their daughters were Parked
+     outside Cody for fifteen hours while the car was actually driving into
+     Yellowstone with no signal. Breadcrumbs only flow while the engine runs,
+     so age ALONE genuinely cannot tell a parked car from a dead tracker.
+
+     But the trips table can. Bouncie opens a trip at ignition and closes it at
+     shutdown. An OPEN trip with no breadcrumbs behind it means the engine was
+     running when the reporting stopped — that is contact lost, not parked. A
+     closed trip and no breadcrumbs is a car sitting still, which is normal and
+     should stay quiet. Three states, not two. */
+  const openTrip = await env.roadtrip.prepare(
+    `SELECT start_time FROM trips WHERE end_time IS NULL
+      ORDER BY start_time DESC LIMIT 1`).first();
+
+  /* The newest non-Bouncie fix — inReach, the companion, or Andy by hand.
+     Only consulted when the car has gone quiet; Bouncie wins whenever it is
+     talking, because it is the one source that means "the car" precisely. */
+  const alt = await env.roadtrip.prepare(
+    `SELECT source, subject, lat, lon, accuracy_m, battery, recorded_at
+       FROM position ORDER BY recorded_at DESC LIMIT 1`).first().catch(() => null);
+
+  const ageMin  = last ? (Date.now() - new Date(last.ts).getTime()) / 60000 : null;
+  const altAge  = alt  ? (Date.now() - new Date(alt.recorded_at).getTime()) / 60000 : null;
+  const carQuiet = ageMin === null || ageMin > 20;
+  /* Contact is LOST, as opposed to merely quiet, when the car was mid-drive.
+     Guard on the open trip starting at or after the last crumb — an ancient
+     orphaned trip row must not put the app into alarm forever. */
+  const contactLost = !!(openTrip && ageMin !== null && ageMin > 20 &&
+                         new Date(openTrip.start_time).getTime() >= new Date(last.ts).getTime() - 3600000);
+  /* Fall back only when the car is quiet AND the other source is genuinely
+     fresher. A three-hour-old phone fix does not improve on a ten-minute-old
+     breadcrumb. */
+  const useAlt = !!(alt && carQuiet && (ageMin === null || altAge < ageMin));
+  const fix = useAlt
+    ? { lat: alt.lat, lon: alt.lon, at: alt.recorded_at, age_min: Math.round(altAge),
+        source: alt.source, subject: alt.subject, accuracy_m: alt.accuracy_m }
+    : last
+      ? { lat: last.lat, lon: last.lon, at: last.ts, age_min: Math.round(ageMin),
+          source: "bouncie", subject: "car", accuracy_m: null }
+      : null;
+
   /* Bouncie sends fuel on its own cadence, not with every breadcrumb — only
      2,702 of 22,731 points carry a level. Reading it off `last` (the newest
      point of any kind) therefore returns null roughly seven times in eight,
@@ -343,9 +386,12 @@ export async function today(env) {
   /* Both fail soft to null / [] and both are cached at the edge, so this adds
      no upstream call on the overwhelming majority of Today pulls. */
   const nights = await nightsSlept(env, vstops);
+  /* Weather and the header town follow the FIX, not the breadcrumb. When the
+     car has been silent for fifteen hours and a phone says they are ninety
+     miles west, the forecast for where the car last spoke is the wrong sky. */
   const [weatherNow, weatherAlerts] = await Promise.all([
-    currentAt(last?.lat ?? null, last?.lon ?? null),
-    alertsAt(last?.lat ?? null, last?.lon ?? null),
+    currentAt(fix?.lat ?? null, fix?.lon ?? null),
+    alertsAt(fix?.lat ?? null, fix?.lon ?? null),
   ]);
 
   const [day, total, mpg, next, lastStop] = await Promise.all([
@@ -380,15 +426,15 @@ export async function today(env) {
     .bind(date)
     .first();
 
-  // Whether the car is moving. A stale last point means parked, not broken.
-  const ageMin = last ? (Date.now() - new Date(last.ts).getTime()) / 60000 : null;
+  // Moving is a claim only Bouncie can make — it is the only source that
+  // reports speed for the car itself. Computed above; see the three-state note.
   const moving = ageMin !== null && ageMin < 6 && (last.speed || 0) > 3;
 
   // Nearest town for the header: "Day 9 · Miles City, MT". The Day screen
   // says "near Medora, ND" from the same function, so the header and the day
   // cannot name different towns for the same coordinate — which they could
   // when this was a second copy of that loop.
-  const town = last ? nearestTown(last.lat, last.lon) : null;
+  const town = fix ? nearestTown(fix.lat, fix.lon) : null;
 
   // v_day_summary only sums COMPLETED trips (distance lands at tripEnd), so
   // the number froze mid-drive — confusing at 70 mph. Add the live path
@@ -447,7 +493,13 @@ export async function today(env) {
   return json({
     date,
     day_number: dayNumber,
+    /* `position` keeps its old shape and its old meaning — the car, per
+       Bouncie — because phones still on the previous shell read it and a
+       silently-redefined field is the worst kind of change. `fix` is the new
+       answer to "where are they", carrying its own provenance and age. */
     position: last ? { lat: last.lat, lon: last.lon, at: last.ts, stale_minutes: Math.round(ageMin) } : null,
+    fix,
+    contact_lost: contactLost,
     moving,
     speed: moving ? Math.round(last.speed) : null,
     fuel: fuel ? { level: fuel.fuel_level, at: fuel.ts } : null,
@@ -1087,6 +1139,90 @@ export async function servePhoto(env, path) {
 
 /** Remove a photo (any author, same rule as journal deletes): DB row first,
     then both R2 objects — a dangling object is better than a dangling row. */
+/* ------------------------------------------------------------- positions */
+
+/**
+ * Server-to-server position ingest — the second door, beside the photo one.
+ *
+ * WHO CALLS THIS. A poller reading the inReach MapShare KML; a native
+ * companion on Lily's or Ada's phone; Andy by hand off a Find My screen. None
+ * of them is a person tapping a button, so this carries the shared secret and
+ * names its own source, exactly like ingestPhoto.
+ *
+ * WHY IT TAKES AN ARRAY. The companion records through a dead zone with no
+ * pipe at all and flushes the whole track the moment one appears. One fix per
+ * request would mean four hundred requests over a link that has just come
+ * back, which is the shape most likely to fail halfway and leave a hole. It
+ * takes a batch and it is idempotent, so the client's retry policy can be
+ * "send it again" and never be wrong.
+ *
+ * WHY THE PAYLOAD IS SMALL. On T-Satellite this rides an ultra-constrained
+ * path — a hundred bytes is the budget, not a hundred kilobytes. Short keys,
+ * no envelope, coordinates rounded to five decimals (about a metre, far finer
+ * than any of these sources actually knows).
+ */
+export async function ingestPosition(env, request) {
+  const secret = request.headers.get("x-ingest-secret") || "";
+  if (!env.INGEST_SECRET || secret !== env.INGEST_SECRET)
+    return json({ error: "unauthorized" }, 401);
+
+  let body;
+  try { body = await request.json(); }
+  catch { return json({ error: "json body required" }, 400); }
+
+  /* Accept a bare object or an array. A caller with one fix should not have to
+     think about the batch case, and a caller with four hundred should not have
+     to send four hundred requests. */
+  const rows = Array.isArray(body) ? body : (Array.isArray(body?.positions) ? body.positions : [body]);
+  if (!rows.length) return json({ error: "no positions" }, 400);
+  if (rows.length > 1000) return json({ error: "batch too large (max 1000)" }, 413);
+
+  const SOURCES = new Set(["inreach", "companion", "manual", "findmy"]);
+  const stmts = [];
+  const received = nowIso();
+  let rejected = 0;
+
+  for (const p of rows) {
+    const source = String(p.source ?? p.s ?? "").toLowerCase();
+    const lat = Number(p.lat ?? p.la);
+    const lon = Number(p.lon ?? p.lo);
+    const recordedAt = String(p.recorded_at ?? p.t ?? "");
+    /* Reject rather than coerce. A position that is wrong is worse than a
+       position that is missing — the whole reason this table exists apart from
+       track_points is that a confident wrong pin is the failure mode here. */
+    if (!SOURCES.has(source) ||
+        !Number.isFinite(lat) || lat < -90  || lat > 90 ||
+        !Number.isFinite(lon) || lon < -180 || lon > 180 ||
+        !recordedAt || Number.isNaN(Date.parse(recordedAt))) {
+      rejected++;
+      continue;
+    }
+    const subject = String(p.subject ?? p.who ?? source).slice(0, 64);
+    const iso = new Date(recordedAt).toISOString();
+    /* Deterministic id = the idempotency key. The same fix replayed from a
+       buffer, a retry, or an overlapping flush window collapses to one row. */
+    const id = `${source}:${subject}:${iso}`.replace(/[^A-Za-z0-9:_.\-]/g, "_").slice(0, 200);
+
+    stmts.push(env.roadtrip.prepare(
+      `INSERT OR IGNORE INTO position
+         (id, source, subject, lat, lon, accuracy_m, speed_mph, course_deg,
+          elevation_m, battery, recorded_at, received_at, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, source, subject,
+           Math.round(lat * 1e5) / 1e5, Math.round(lon * 1e5) / 1e5,
+           num(p.accuracy_m ?? p.acc), num(p.speed_mph ?? p.spd),
+           num(p.course_deg ?? p.crs), num(p.elevation_m ?? p.ele),
+           p.battery == null ? null : Math.round(Number(p.battery)),
+           iso, received,
+           p.note == null ? null : String(p.note).slice(0, 200)));
+  }
+
+  if (stmts.length) await env.roadtrip.batch(stmts);
+  return json({ ok: true, accepted: stmts.length, rejected });
+}
+
+const num = (x) => (x == null || x === "" || Number.isNaN(Number(x)) ? null : Number(x));
+
 /** The six, for the author picker. Names only — no tokens, no handles, nothing
     that isn't already on every photo card in the app. */
 export async function people(env) {
