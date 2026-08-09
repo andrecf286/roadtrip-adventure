@@ -957,9 +957,15 @@ function loadToday(){
         : (t.check_in_date ? "Arriving " + fmtShort(t.check_in_date) : "");
       if (t.check_out_time) line += " &middot; out " + esc(t.check_out_time);
       else if (t.check_out_date) line += " &middot; until " + fmtShort(t.check_out_date);
+      /* A plan and a booking are different promises and the card must not blur
+         them — it shows a receipt line and a cost, which read as "this is
+         arranged". Unbooked stays now reach this card (they always were the
+         itinerary; the view just hid them), so they say so. */
+      var plan = (!t.actual && t.booked === 0)
+        ? ' <span class="tiny" style="color:#9a5b4a">not booked</span>' : '';
       tonight = '<h2>' + when + '</h2><div class="card' + (t.actual ? '' : ' tapme') + '"' +
         (t.actual ? '' : ' onclick="loadRes(\'' + jsId(t.id) + '\')"') + '>' +
-        '<div class="row"><b>' + esc(t.name) + '</b>' +
+        '<div class="row"><b>' + esc(t.name) + plan + '</b>' +
         (t.place_name ? '<span class="muted">' + esc(t.place_name) + '</span>' : '') + '</div>' +
         (line ? '<p class="muted" style="margin:7px 0 0">' + line + '</p>' : '') +
         '<p class="tiny" style="margin:5px 0 0">' +

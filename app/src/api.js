@@ -401,12 +401,20 @@ export async function today(env) {
     // v_tonight sorts on a real date, not the mixed '2pm' / '2026-08-04'
     // strings the vault gave us. Prefer a stay covering today; otherwise the
     // next one starting.
+    /* Tonight, ranked rather than filtered. v_tonight used to drop every
+       unbooked row, so a plan could not be tonight — which on 08-09 put Big
+       Sur on the card three weeks early because it was the next thing with a
+       receipt. Now both are present and the ORDER BY decides: tonight before
+       upcoming, soonest first, and a booking ahead of a plan only when they
+       fall on the same day. */
     env.roadtrip.prepare(
       `SELECT id, name, place_name, check_in_date, check_in_time, check_out_date,
-              check_out_time, cost, confirmation, site, cancel_by, whenish
+              check_out_time, cost, confirmation, site, cancel_by, whenish, booked
          FROM v_tonight
         WHERE whenish IN ('tonight','upcoming')
-        ORDER BY CASE whenish WHEN 'tonight' THEN 0 ELSE 1 END, check_in_date
+        ORDER BY CASE whenish WHEN 'tonight' THEN 0 ELSE 1 END,
+                 check_in_date,
+                 booked DESC
         LIMIT 1`).first(),
     env.roadtrip.prepare(
       `SELECT id, kind, place, occurred_at, gallons, cost, note
