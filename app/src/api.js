@@ -1232,10 +1232,16 @@ export async function ingestPosition(env, request) {
 const num = (x) => (x == null || x === "" || Number.isNaN(Number(x)) ? null : Number(x));
 
 /** The six, for the author picker. Names only — no tokens, no handles, nothing
-    that isn't already on every photo card in the app. */
+    that isn't already on every photo card in the app.
+
+    `hidden = 0` excludes guests: someone who holds a session so they can look
+    at the app, but who should not appear inside it. This is the ONE passive
+    surface that enumerates people, so it is the only place the flag needs to
+    be honoured — every other name in the app belongs to someone who wrote
+    something, and a viewer cannot write. See migration 022. */
 export async function people(env) {
   const rows = await env.roadtrip.prepare(
-    `SELECT id, name, role FROM person ORDER BY role DESC, name`).all();
+    `SELECT id, name, role FROM person WHERE hidden = 0 ORDER BY role DESC, name`).all();
   return json({ people: rows.results });
 }
 

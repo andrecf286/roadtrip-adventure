@@ -61,13 +61,26 @@ export default {
       if (!env.MINT_SECRET || url.searchParams.get("k") !== env.MINT_SECRET) {
         return new Response("nope", { status: 404 });
       }
+      /* `?days=N` — because 120 is right for the six people living the trip
+         and wrong for a guest being shown the app once. There is no revocation
+         list; the only ways to end access are deleting the person row or
+         waiting out the expiry, so a short link IS the revocation for someone
+         who only needs to look. Clamped to 1–120: no zero-day links that
+         confuse the recipient, and never longer than the family's own. */
+      const askedDays = Number(url.searchParams.get("days"));
+      const days = Number.isFinite(askedDays) && askedDays > 0
+        ? Math.min(Math.floor(askedDays), 120)
+        : 120;
+      /* Hidden guests DO appear here — this surface is how Andy gets their
+         link, and it is gated by MINT_SECRET. Hidden means hidden from the
+         app, not from its owner. */
       const people = await env.roadtrip
-        .prepare("SELECT id, name, role, email FROM person ORDER BY role DESC, name").all();
+        .prepare("SELECT id, name, role, email, hidden FROM person ORDER BY role DESC, name").all();
       const links = [];
       for (const p of people.results) {
-        links.push({ ...p, link: `${url.origin}/a/${await mintToken(env.SESSION_SECRET, p.id)}` });
+        links.push({ ...p, link: `${url.origin}/a/${await mintToken(env.SESSION_SECRET, p.id, days)}` });
       }
-      return json({ expires_days: 120, links });
+      return json({ expires_days: days, links });
     }
 
     if (path === "/health") return json({ ok: true, service: "roadtrip-app" });

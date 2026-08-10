@@ -1,0 +1,21 @@
+-- 022 — a person can hold a session without appearing in the app.
+--
+-- Andy is showing the app to a family friend. She needs a `person` row,
+-- because that is what a session token resolves against — but she should not
+-- show up in the app's own list of people. Not for privacy: the girls know she
+-- is looking. For FEEL. Two teenagers on their gap year should not open the
+-- app and find a new name in a picker, because the app should read as theirs
+-- and not as something with an audience.
+--
+-- One passive surface enumerates people: /api/people, which feeds the "whose?"
+-- photo-author picker. Every other place a name appears — photo author,
+-- journal author, stop author, badge awarder — requires that person to have
+-- WRITTEN something, and a viewer cannot write stops, journal entries or
+-- photos. A viewer can award a badge, and if she does, her name should appear:
+-- that is participation, not surveillance, and hiding it would make the badge
+-- confusing.
+--
+-- Default 0, so this is invisible to every existing row and to every future
+-- family member. It exists for guests.
+
+ALTER TABLE person ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
