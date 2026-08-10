@@ -878,6 +878,15 @@ function doDelete(kind, id){
    Delete stay gated for that reason and no other. */
 function canWrite(){ return !!(ME && ME.role === "author"); }
 
+/* Badges are the one write a viewer gets, so canWrite() is the wrong question
+   for them. A hidden guest is the exception: view-only, enforced on all four
+   badge routes, and the composer is hidden here for the reason stated up top
+   -- a tap that answers 403 reads as "I broke something". ME.can_award is
+   absent on a phone still running an older shell; treating undefined as
+   allowed keeps the six unaffected while that shell ages out, and the server
+   is the actual gate either way. */
+function canAward(){ return !!(ME && ME.can_award !== false); }
+
 /* Named people, not roles. "Insufficient permissions" is what software says;
    these three already know exactly who is driving. */
 var DENY = {
@@ -1680,9 +1689,11 @@ function loadBadges(){
       (d.parks||[]).length+' parks &middot; '+d.miles.total.toLocaleString()+' miles</p>' +
       '<h2>From the family</h2>' +
       (bespoke.length ? wall(bespoke)
-        : '<p class="empty">None yet. Anyone can award one &mdash; make one up.</p>') +
+        : '<p class="empty">None yet.' + (canAward() ? ' Anyone can award one &mdash; make one up.' : '') + '</p>') +
+      (canAward() ?
       '<button class="ghostbtn" id="bg-open" onclick="el(\'bg-composer\').style.display=\'block\';this.style.display=\'none\'">' +
-        'Award a badge</button>' +
+        'Award a badge</button>' : '') +
+      (canAward() ?
       '<div class="card" id="bg-composer" style="margin-top:9px;display:none">' +
         '<div class="row" style="gap:8px"><input type="text" id="bg-emoji" placeholder="&#127941;" ' +
           'style="width:64px;flex:none;text-align:center">' +
@@ -1694,7 +1705,7 @@ function loadBadges(){
         '<div class="row" style="margin-top:8px"><button class="ghostbtn" style="margin:0;flex:1" ' +
           'onclick="el(\'bg-image\').click()">Add a picture</button>' +
           '<span class="tiny" id="bg-image-note" style="max-width:45%;overflow:hidden;text-overflow:ellipsis"></span></div>' +
-        '<button class="ghostbtn" onclick="awardBadge()">Award it</button></div>' +
+        '<button class="ghostbtn" onclick="awardBadge()">Award it</button></div>' : '') +
       '<h2>National parks</h2>' + wall(parks) +
       '<h2>States</h2>' +
       (states.length ? wall(states) : '<p class="empty">No states yet &mdash; that changes fast.</p>') +

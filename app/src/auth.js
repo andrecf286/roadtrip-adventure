@@ -80,7 +80,35 @@ export function cookieFrom(request) {
   return null;
 }
 
-export function sessionCookie(token, days = 120) {
+/**
+ * Read a token's expiry WITHOUT verifying it. Only ever used to size the
+ * cookie that will carry an already-verified token, never to decide access.
+ */
+export function tokenExpiry(token) {
+  try {
+    const { e } = JSON.parse(b64urlDecodeToString(token.slice(0, token.lastIndexOf("."))));
+    return typeof e === "number" ? e : null;
+  } catch { return null; }
+}
+
+/**
+ * The cookie now expires WITH its token instead of always lasting 120 days.
+ *
+ * These were independent, and for the family that was invisible: both were
+ * 120. A seven-day guest link made it visible — the cookie would outlive the
+ * token by sixteen weeks, so from day eight she would hold a credential the
+ * server rejects. Not a security hole (the token is what is verified) but it
+ * produces the worst version of the failure: the browser keeps presenting a
+ * dead card, so she lands on the generic signed-out page instead of anything
+ * that explains itself. A cookie should not claim a life its contents do not
+ * have.
+ */
+export function sessionCookie(token, days) {
+  if (days == null) {
+    const e = tokenExpiry(token);
+    const left = e ? Math.ceil((e - Date.now()) / 86400000) : 120;
+    days = Math.max(1, Math.min(left, 120));
+  }
   return `rt_s=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${days * 86400}`;
 }
 
@@ -88,8 +116,10 @@ export function sessionCookie(token, days = 120) {
 export async function currentPerson(request, env) {
   const id = await readToken(env.SESSION_SECRET, cookieFrom(request));
   if (!id) return null;
+  /* `hidden` rides along because it is a capability, not just a display flag:
+     a hidden guest is view-only, and the badge routes ask this row. */
   return env.roadtrip
-    .prepare("SELECT id, name, role, email FROM person WHERE id = ?")
+    .prepare("SELECT id, name, role, email, hidden FROM person WHERE id = ?")
     .bind(id)
     .first();
 }

@@ -6,7 +6,7 @@
  * would buy nothing here and cost startup time exactly where it hurts.
  */
 
-import { currentPerson, mintToken, readToken, sessionCookie } from "./auth.js";
+import { cookieFrom, currentPerson, mintToken, readToken, sessionCookie } from "./auth.js";
 import { SHELL } from "./shell.js";
 import * as api from "./api.js";
 import { TITLE_FONT_B64 } from "./font_title.js";
@@ -43,13 +43,15 @@ export default {
 
     if (!env.SESSION_SECRET) return new Response("SESSION_SECRET not set", { status: 500 });
 
-    /* -- follow a magic link: verify, drop a 120-day cookie, land on Today -- */
+    /* -- follow a magic link: verify, drop a matching cookie, land on Today -- */
     if (path.startsWith("/a/")) {
       const token = path.slice(3);
       const personId = await readToken(env.SESSION_SECRET, token);
       if (!personId) {
         return new Response(expiredPage(), { status: 401, headers: { "content-type": "text/html" } });
       }
+      /* No explicit lifetime: the cookie now sizes itself to the token it
+         carries, so a 7-day guest link leaves a 7-day cookie behind. */
       return new Response(null, {
         status: 302,
         headers: { location: "/", "set-cookie": sessionCookie(token) },
@@ -149,7 +151,13 @@ export default {
         ? await request.json().catch(() => ({})) : {};
 
       switch (path) {
-        case "/api/me":          return json(person);
+        /* `hidden` is answered as a CAPABILITY, not as an identity. The client
+           needs to know whether to draw the award composer; it does not need
+           to tell a guest she is hidden, and the flag is the server's business
+           anyway — every badge route re-checks the person row. */
+        case "/api/me":          return json({
+          id: person.id, name: person.name, role: person.role,
+          email: person.email, can_award: !person.hidden });
         case "/api/version":     return json({ v: await shellVersion() });
         case "/api/today":       return api.today(env);
         case "/api/trip":        return api.trip(env);
@@ -187,8 +195,14 @@ export default {
       }
     }
 
+    /* Two different situations wearing one page until now. Someone who has
+       never been here needs "use your link"; someone whose link RAN OUT needs
+       to know that is what happened, or the app just looks broken to them.
+       The cookie tells them apart: present but unresolvable means it expired
+       (or was tampered with, which earns the same answer). */
     if (!person) {
-      return new Response(signedOutPage(), { status: 401, headers: { "content-type": "text/html" } });
+      const page = cookieFrom(request) ? expiredPage() : signedOutPage();
+      return new Response(page, { status: 401, headers: { "content-type": "text/html" } });
     }
 
     // The shell is stamped with its own hash. It used to adopt whatever the
@@ -208,5 +222,9 @@ div{max-width:20rem}h1{font-size:22px;margin:0 0 8px}p{color:#57514a;margin:0}</
 const signedOutPage = () => `${PLAIN}<div><h1>Roadtrip Adventure</h1>
 <p>This is a private trip journal. Open it using the link you were sent.</p></div>`;
 
+/* It used to promise "they last 120 days". True for the six, and wrong the
+   day a 7-day guest link shipped — and a page whose job is to explain a
+   failure should not be the thing telling you something false. It no longer
+   quotes a number it cannot know. */
 const expiredPage = () => `${PLAIN}<div><h1>That link has expired</h1>
-<p>Ask Andy for a fresh one — they last 120 days.</p></div>`;
+<p>Ask Andy for a fresh one and it will pick up right where this left off.</p></div>`;

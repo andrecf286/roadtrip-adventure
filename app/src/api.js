@@ -1676,12 +1676,24 @@ export async function badgeDetail(env, kind, key) {
   }
 }
 
+/* A hidden guest is here to LOOK. Badges are the one write a viewer can make
+   (Andy's call, 2026-08-03) and that stays true for the six — but the whole
+   reason a guest is hidden is so the girls do not feel watched, and a guest
+   awarding a badge puts a stranger's name into their app, which is the exact
+   feeling the hidden flag exists to prevent. So `hidden` narrows to view-only.
+   Checked on all four badge writes rather than just the create: edit and
+   delete are owner-or-author, and a guest owns nothing, but a rule enforced
+   in one place out of four is a rule waiting to be walked around. */
+const guestOnly = { error: "viewing only" };
+const isGuest = (person) => !!(person && person.hidden);
+
 /** Award a bespoke badge. Deliberately NOT authors-only — this is the one
-    viewer write in the app (Andy's call, 2026-08-03): any of the six can
+    viewer write in the app (Andy's call, 2026-08-03): any of the SIX can
     invent and award a badge. It writes nothing about location or the girls;
-    it is a gift mechanic. */
+    it is a gift mechanic. Hidden guests excepted, see above. */
 export async function createBadge(env, person, body) {
   if (!person) return json({ error: "unauthorized" }, 401);
+  if (isGuest(person)) return json(guestOnly, 403);
   if (!body.title || !body.title.trim()) return json({ error: "title required" }, 400);
   const id = safeId(body.client_id);
   await env.roadtrip.prepare(
@@ -1699,6 +1711,7 @@ export async function createBadge(env, person, body) {
     resizes it, we park it in R2 under badges/ and serve it session-gated. */
 export async function uploadBadge(env, person, request) {
   if (!person) return json({ error: "unauthorized" }, 401);
+  if (isGuest(person)) return json(guestOnly, 403);
   let form;
   try { form = await request.formData(); }
   catch { return json({ error: "multipart form required" }, 400); }
@@ -1746,6 +1759,7 @@ export async function uploadBadge(env, person, request) {
     touched here; re-award if the picture is wrong. */
 export async function updateBadge(env, person, body) {
   if (!person) return json({ error: "unauthorized" }, 401);
+  if (isGuest(person)) return json(guestOnly, 403);
   if (!body.id) return json({ error: "id required" }, 400);
   if (!body.title || !body.title.trim()) return json({ error: "title required" }, 400);
   const row = await env.roadtrip
@@ -1764,6 +1778,7 @@ export async function updateBadge(env, person, body) {
 
 export async function deleteBadge(env, person, body) {
   if (!person) return json({ error: "unauthorized" }, 401);
+  if (isGuest(person)) return json(guestOnly, 403);
   if (!body.id) return json({ error: "id required" }, 400);
   const row = await env.roadtrip
     .prepare(`SELECT awarded_by, image_key FROM badge WHERE id = ?`).bind(body.id).first();
