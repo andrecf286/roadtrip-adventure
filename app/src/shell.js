@@ -509,6 +509,55 @@ function fmtAgo(min){
   return Math.round(min/1440) + " days ago";
 }
 
+/* The clock the GIRLS were on when the tracker last spoke — not the reader's
+   clock, and not elapsed minutes. "since 9:05p" is understood at a glance over
+   breakfast; "9h ago" makes a parent do arithmetic before they are allowed to
+   feel better.
+
+   Returns "" when it cannot honestly answer, and the caller then falls back to
+   elapsed. That is the whole error-handling story, and it replaces an earlier
+   version of this function that "fell through" a malformed offset to TODAY_TZ
+   — which was a no-op wearing a fix's comment, because TODAY_TZ is assigned
+   FROM the same d.tz_offset, one line AFTER liveState has already run. There is
+   no second source for the car's zone on this client. If the offset will not
+   parse, the honest move is to say the thing we do know (how long ago) rather
+   than to render a confident wrong clock.
+
+   The offset grammar matches tz.js's tzMinutes exactly — "-0500", "-05:00" and
+   "-05" all parse — because the server buckets local DAYS with that parser and
+   a stricter one here would put the clock and the date in different zones. */
+function fmtLocalClock(iso, off, ageMin){
+  if (!iso) return "";
+  var m = /^([+-])(\d{2}):?(\d{2})?$/.exec(String(off == null ? "" : off).replace(/^\s+|\s+$/g, ""));
+  if (!m) return "";
+  var mins = (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] || 0));
+  var then = new Date(new Date(iso).getTime() + mins * 60000);
+  if (isNaN(then.getTime())) return "";
+  var clock = fmtClock(then);
+  /* A day word is added ONLY once the clock alone is ambiguous — past twelve
+     hours, when the same reading has come round again. Under that it is
+     omitted even across a midnight, which is the case that matters: contact is
+     declared lost at twenty minutes, so a fix at 11:59p read at 00:20 used to
+     render "since yesterday 11:59p" — true, and a far worse account of a
+     twenty-one-minute silence than the elapsed form it replaced. */
+  if (ageMin != null && ageMin < 720) return clock;
+  /* "Now" is the fix's own timestamp plus the age the SERVER measured, never
+     Date.now() — a phone with a wrong date would otherwise compute a day
+     difference of zero and render a four-day silence as "since 9:05p". */
+  var now = new Date((ageMin != null
+    ? new Date(iso).getTime() + ageMin * 60000
+    : Date.now()) + mins * 60000);
+  /* Compared in the car's zone, which is why both sides are shifted and read
+     via getUTC* — the phone's own zone is nobody's answer here. */
+  var dayDiff = Math.round(
+    (Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) -
+     Date.UTC(then.getUTCFullYear(), then.getUTCMonth(), then.getUTCDate())) / 86400000);
+  if (dayDiff <= 0) return clock;
+  if (dayDiff === 1) return "yesterday " + clock;
+  if (dayDiff < 7)   return then.toLocaleDateString([], { weekday:"long", timeZone:"UTC" }) + " " + clock;
+  return then.toLocaleDateString([], { month:"short", day:"numeric", timeZone:"UTC" }) + " " + clock;
+}
+
 /* ONE function decides what the live line says, because there are two of them
    on two screens and they must never disagree about whether the girls are fine.
 
@@ -536,10 +585,24 @@ function liveState(d){
     return { colour:"#7a6a55",
              text:esc(f.subject || f.source) + " &middot; " + fmtAgo(f.age_min),
              cls:" parked" };
-  if (d.contact_lost)
+  /* Contact lost: an open trip with no breadcrumbs behind it, which means the
+     engine was running when the reporting stopped.
+
+     It says WHEN, on the girls' clock, rather than how long ago. "since
+     yesterday 9:05p" is understood at a glance over breakfast; "last heard 9h
+     ago" makes a parent do arithmetic before they are allowed to feel better.
+     The amber stays: this app cannot tell a campground from a canyon, and a
+     line that goes quiet on a timer would have gone quiet through eleven of
+     the fifteen hours the car spent genuinely lost on 2026-08-08. What answers
+     the fear is the context line underneath, which is evidence — every night
+     of this trip has gone dark for hours — not a verdict by the app. */
+  if (d.contact_lost) {
+    var since = fmtLocalClock(f && f.at, d.tz_offset, f && f.age_min);
     return { colour:"#9a5b4a",
-             text:"No signal &middot; last heard " + fmtAgo(f && f.age_min),
+             text: since ? "No signal since " + since
+                         : "No signal &middot; last heard " + fmtAgo(f && f.age_min),
              cls:" lost" };
+  }
   if (f && f.age_min != null && f.age_min > 180)
     return { colour:"#a49a8e", text:"Parked &middot; last heard " + fmtAgo(f.age_min),
              cls:" parked" };
@@ -954,8 +1017,12 @@ function loadToday(){
     var mpg = d.mpg ? '<div class="stat"><span>'+d.mpg.value+'</span><small>mpg</small>'+
         '<span class="qual">'+esc(d.mpg.method)+'</span></div>'
       : '<div class="stat"><span>&mdash;</span><small>mpg</small><span class="qual">needs two fills</span></div>';
-    var ls = liveState(d);
-    var live = '<div class="live'+ls.cls+'"><span class="dot"></span> '+ls.text+'</div>';
+    /* The .live pill these two lines built was never inserted into any screen —
+       Today renders the state inline in l1b from ls2, and no other caller
+       existed. Removed 2026-08-11: it cost a second liveState() call on every
+       paint and, worse, it made the pill's CSS look load-bearing while nobody
+       could see it. The .live rules are left in place for whenever the pill
+       comes back. */
     var t = d.tonight;
     var tonight = "";
     if (t) {
