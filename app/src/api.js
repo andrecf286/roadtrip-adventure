@@ -40,7 +40,7 @@ import { HOME_TZ, localDate, localHour } from "./tz.js";
  * Two screens carried this query verbatim and would have drifted the first
  * time either was touched. Falls back to Ohio, like everything else here.
  */
-async function tripOffset(env) {
+export async function tripOffset(env) {
   const row = await env.roadtrip.prepare(
     `SELECT time_zone FROM trips WHERE time_zone IS NOT NULL
       ORDER BY start_time DESC LIMIT 1`).first();
@@ -1133,7 +1133,7 @@ export async function uploadPhoto(env, person, request) {
     these are pictures of two teenagers' trip, never public URLs. */
 export async function servePhoto(env, path) {
   const key = path.replace(/^\/photo\//, "");
-  if (!/^(photos|thumbs|badges|parkbadges)\//.test(key)) return json({ error: "bad key" }, 400);
+  if (!/^(photos|thumbs|badges|badgethumbs|parkbadges)\//.test(key)) return json({ error: "bad key" }, 400);
   const obj = await env.PHOTOS.get(key);
   if (!obj) return json({ error: "not found" }, 404);
   return new Response(obj.body, {
@@ -1490,7 +1490,7 @@ export async function badges(env) {
       `SELECT COUNT(*) AS n FROM stop WHERE kind = 'gas' AND gallons IS NOT NULL`).first(),
     env.roadtrip.prepare(
       `SELECT b.id, b.title, b.emoji, b.note, b.date, b.created_at,
-              b.awarded_by, b.image_key, p.name AS awarded_by_name
+              b.awarded_by, b.image_key, b.thumb_key, p.name AS awarded_by_name
          FROM badge b LEFT JOIN person p ON p.id = b.awarded_by
         ORDER BY b.created_at DESC`).all(),
   ]);
@@ -1696,13 +1696,15 @@ export async function createBadge(env, person, body) {
   if (isGuest(person)) return json(guestOnly, 403);
   if (!body.title || !body.title.trim()) return json({ error: "title required" }, 400);
   const id = safeId(body.client_id);
+  const tz = (body.tz_offset || "").toString().trim();
   await env.roadtrip.prepare(
-    `INSERT OR IGNORE INTO badge (id, title, emoji, note, date, awarded_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT OR IGNORE INTO badge (id, title, emoji, note, date, awarded_by, tz_offset, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, body.title.trim().slice(0, 80),
          (body.emoji || "").trim().slice(0, 8) || null,
          (body.note || "").trim().slice(0, 500) || null,
-         body.date || null, person.id, nowIso()).run();
+         body.date || null, person.id,
+         /^[+-]\d{2}:?\d{2}$/.test(tz) ? tz : null, nowIso()).run();
   return json({ ok: true, id });
 }
 
@@ -1733,21 +1735,39 @@ export async function uploadBadge(env, person, request) {
   if (owner && person.id !== owner.awarded_by && person.role !== "author")
     return json({ error: "not yours to edit" }, 403);
 
-  let imageKey = null;
+  /* Two sizes, the same way photographs have always been stored here. The
+     full object is what the badge book prints; the thumb is what the wall
+     paints at 76px. One object served to both was fine at 640px and stops
+     being fine the moment the full one is big enough to print, which is the
+     whole reason the client now sends 1600 — a wall of sixteen full-size
+     badges is five megabytes on campground wifi to draw sixteen tiles. */
+  let imageKey = null, thumbKey = null;
   const img = form.get("image");
   if (img && typeof img !== "string") {
     imageKey = "badges/" + id + ".jpg";
     await env.PHOTOS.put(imageKey, img.stream(), {
       httpMetadata: { contentType: "image/jpeg" } });
   }
+  const thumb = form.get("thumb");
+  if (thumb && typeof thumb !== "string") {
+    thumbKey = "badgethumbs/" + id + ".jpg";
+    await env.PHOTOS.put(thumbKey, thumb.stream(), {
+      httpMetadata: { contentType: "image/jpeg" } });
+  }
+  /* The awarder's own offset, not the car's. Three of the six award badges
+     from Ohio while the car is two zones west, and the book prints a DAY. */
+  const tz = (form.get("tz_offset") || "").toString().trim();
   await env.roadtrip.prepare(
-    `INSERT OR IGNORE INTO badge (id, title, emoji, note, date, awarded_by, image_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT OR IGNORE INTO badge (id, title, emoji, note, date, awarded_by, image_key,
+                                  thumb_key, tz_offset, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, title.slice(0, 80),
          (form.get("emoji") || "").toString().trim().slice(0, 8) || null,
          (form.get("note") || "").toString().trim().slice(0, 500) || null,
          (form.get("date") || "").toString() || null,
-         person.id, imageKey, nowIso()).run();
+         person.id, imageKey, thumbKey,
+         /^[+-]\d{2}:?\d{2}$/.test(tz) ? tz : null,
+         nowIso()).run();
   return json({ ok: true, id });
 }
 

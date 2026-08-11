@@ -1743,8 +1743,11 @@ function loadBadges(){
 
     var bespoke = (d.bespoke||[]).map(function(b){
       return tile("bespoke", b.id,
-        b.image_key
-          ? '<img src="/photo/'+esc(b.image_key)+'" alt="" loading="lazy">'
+        /* Thumb first, full object only for the sixteen awarded before
+           badgethumbs/ existed. The tile is 76px; the full object is now big
+           enough to print. */
+        (b.thumb_key || b.image_key)
+          ? '<img src="/photo/'+esc(b.thumb_key || b.image_key)+'" alt="" loading="lazy">'
           : '<span class="glyph">'+(b.emoji?esc(b.emoji):'&#127941;')+'</span>',
         b.title, esc(b.awarded_by_name||""));
     });
@@ -1773,6 +1776,17 @@ function loadBadges(){
           'onclick="el(\'bg-image\').click()">Add a picture</button>' +
           '<span class="tiny" id="bg-image-note" style="max-width:45%;overflow:hidden;text-overflow:ellipsis"></span></div>' +
         '<button class="ghostbtn" onclick="awardBadge()">Award it</button></div>' : '') +
+      /* The way out. It sits under the family badges, not at the foot of the
+         screen, because it only covers those — and because Amelia, who awarded
+         most of them and is the reason this exists, opens this screen to look
+         at exactly this wall. canAward() gates it: that flag is false only for
+         a hidden guest, which is the same line the server draws on the route.
+         The book opens in a new tab rather than replacing the app; on a phone
+         that keeps her place, and on the desktop where she will actually print
+         it, it is the tab she prints from. */
+      (canAward() ?
+      '<button class="ghostbtn" onclick="window.open(\'/badge-book\',\'_blank\')">' +
+        'Make a badge book &mdash; every badge, one page each</button>' : '') +
       '<h2>National parks</h2>' + wall(parks) +
       '<h2>States</h2>' +
       (states.length ? wall(states) : '<p class="empty">No states yet &mdash; that changes fast.</p>') +
@@ -1990,22 +2004,39 @@ function awardBadge(){
     loadBadges();
   };
   if (file) {
-    // Amelia's cool tags: resize to 640px so a generated image costs ~60KB.
+    /* Amelia's cool tags. This was 640px "so a generated image costs ~60KB",
+       which was right when a badge was a thing you looked at on a phone and
+       wrong the moment she started making a printed book out of them: 640px
+       is 2.1 inches at 300dpi. Photographs in this same app have always gone
+       up at 1800. There are sixteen badges, not ninety-three photos, so the
+       whole set at 1600 is about five megabytes and the ceiling was buying
+       nothing. Does NOT help the sixteen already uploaded — their originals
+       only ever existed on the awarder's phone. */
     file.arrayBuffer().then(function(buf){
       return createImageBitmap(new Blob([buf]), { imageOrientation: "from-image" })
-        .then(function(img){ return scaleToBlob(img, 640, 0.82); });
-    }).then(function(blob){
+        .then(function(img){
+          /* Both sizes, exactly as a photograph is uploaded. The wall paints
+             76px tiles and the book prints 4.3 inches; one object cannot be
+             both without somebody paying, and on this app the somebody is a
+             phone on campground wifi. */
+          return Promise.all([scaleToBlob(img, 1600, 0.85), scaleToBlob(img, 420, 0.75)]);
+        });
+    }).then(function(blobs){
       var fd = new FormData();
       fd.append("title", t.value);
       fd.append("emoji", (el("bg-emoji")||{}).value||"");
       fd.append("note", (el("bg-note")||{}).value||"");
-      fd.append("image", blob, "badge.jpg");
+      fd.append("image", blobs[0], "badge.jpg");
+      fd.append("thumb", blobs[1], "badge-thumb.jpg");
+      /* The awarder's clock, not the car's — three of the six are in Ohio and
+         the badge book prints a day. */
+      fd.append("tz_offset", tzOffset());
       return fetch("/api/badge/upload", { method:"POST", credentials:"same-origin", body: fd })
         .then(function(r){ return r.json(); });
     }).then(done, function(){ alertInline(t, "Couldn't award — try again."); });
   } else {
     send("/api/badge","POST",{ title:t.value, emoji:(el("bg-emoji")||{}).value||"",
-         note:(el("bg-note")||{}).value||"" }).then(done);
+         note:(el("bg-note")||{}).value||"", tz_offset:tzOffset() }).then(done);
   }
 }
 

@@ -9,6 +9,8 @@
 import { cookieFrom, currentPerson, mintToken, readToken, sessionCookie } from "./auth.js";
 import { SHELL } from "./shell.js";
 import * as api from "./api.js";
+import { badgeBook } from "./badgebook.js";
+import { tzMinutes } from "./tz.js";
 import { TITLE_FONT_B64 } from "./font_title.js";
 import { STATE_ARCS } from "./geo.js";
 import { STATE_ARCS_FINE } from "./geo_fine.js";
@@ -140,6 +142,33 @@ export default {
       if (request.method !== "POST") return json({ error: "POST only" }, 405);
       return api.ingestPosition(env, request);
     }
+    /* The badge book: a whole printable document, not JSON, so it sits with
+       the other byte-serving routes rather than in the api switch below.
+       Amelia is a viewer and this is hers to take — the badge economy is the
+       one surface the viewers own. A hidden guest is refused: a short-term
+       looker should not get a one-click archive of the family's artwork and
+       their notes to each other, which is a capability question rather than a
+       visibility one (see `audit-capability-not-only-visibility`). */
+    if (path === "/badge-book") {
+      if (request.method !== "GET" && request.method !== "HEAD")
+        return json({ error: "GET only" }, 405);
+      /* HTML, not JSON, on the way out AND on the way in. This is a route a
+         person NAVIGATES to — the Badges screen opens it in a new tab — so the
+         two signed-out pages below apply here exactly as they do to the app
+         itself. A stale tab whose token has expired would otherwise open a new
+         window containing {"error":"unauthorized"}, which is the precise
+         "app just looks broken to them" outcome expiredPage() exists to
+         prevent. */
+      if (!person) {
+        return new Response(cookieFrom(request) ? expiredPage() : signedOutPage(),
+          { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+      if (person.hidden) {
+        return new Response(guestNoBookPage(), {
+          status: 403, headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+      return badgeBook(env, tzMinutes(await api.tripOffset(env)));
+    }
     if (path === "/api/badge/upload") {
       if (!person) return json({ error: "unauthorized" }, 401);
       return api.uploadBadge(env, person, request);
@@ -218,6 +247,13 @@ const PLAIN = `<!doctype html><meta name=viewport content="width=device-width,in
 <style>body{font:17px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;background:#fbf9f6;color:#14110e;
 margin:0;display:grid;place-items:center;min-height:100dvh;padding:32px;text-align:center}
 div{max-width:20rem}h1{font-size:22px;margin:0 0 8px}p{color:#57514a;margin:0}</style>`;
+
+/* A guest holds a real session and is looking at the badge wall, so "signed
+   out" would be a lie and "unauthorized" reads like a fault. Say the true
+   thing: the book is the family's to take. */
+const guestNoBookPage = () => `${PLAIN}<div><h1>The badge book</h1>
+<p>The book is for the family to make &mdash; but the badges themselves are
+right there on the Badges screen whenever you want to look.</p></div>`;
 
 const signedOutPage = () => `${PLAIN}<div><h1>Roadtrip Adventure</h1>
 <p>This is a private trip journal. Open it using the link you were sent.</p></div>`;
