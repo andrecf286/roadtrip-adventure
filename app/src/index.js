@@ -9,7 +9,7 @@
 import { cookieFrom, currentPerson, mintToken, readToken, sessionCookie } from "./auth.js";
 import { SHELL } from "./shell.js";
 import * as api from "./api.js";
-import { badgeBook } from "./badgebook.js";
+import { badgeBook, badgesZip } from "./badgebook.js";
 import { tzMinutes } from "./tz.js";
 import { TITLE_FONT_B64 } from "./font_title.js";
 import { STATE_ARCS } from "./geo.js";
@@ -167,7 +167,23 @@ export default {
         return new Response(guestNoBookPage(), {
           status: 403, headers: { "content-type": "text/html; charset=utf-8" } });
       }
-      return badgeBook(env, tzMinutes(await api.tripOffset(env)));
+      return badgeBook(env, tzMinutes(await api.tripOffset(env)), api.firstVisitDates);
+    }
+    /* The export. Same gate, same reasoning, different container: this one is
+       an attachment meant to land in Downloads, so the browser saves it rather
+       than rendering it. */
+    if (path === "/badges.zip") {
+      if (request.method !== "GET" && request.method !== "HEAD")
+        return json({ error: "GET only" }, 405);
+      if (!person) {
+        return new Response(cookieFrom(request) ? expiredPage() : signedOutPage(),
+          { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+      if (person.hidden) {
+        return new Response(guestNoBookPage(), {
+          status: 403, headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+      return badgesZip(env, tzMinutes(await api.tripOffset(env)), api.firstVisitDates);
     }
     if (path === "/api/badge/upload") {
       if (!person) return json({ error: "unauthorized" }, 401);

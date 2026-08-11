@@ -1776,17 +1776,28 @@ function loadBadges(){
           'onclick="el(\'bg-image\').click()">Add a picture</button>' +
           '<span class="tiny" id="bg-image-note" style="max-width:45%;overflow:hidden;text-overflow:ellipsis"></span></div>' +
         '<button class="ghostbtn" onclick="awardBadge()">Award it</button></div>' : '') +
-      /* The way out. It sits under the family badges, not at the foot of the
-         screen, because it only covers those — and because Amelia, who awarded
-         most of them and is the reason this exists, opens this screen to look
-         at exactly this wall. canAward() gates it: that flag is false only for
-         a hidden guest, which is the same line the server draws on the route.
-         The book opens in a new tab rather than replacing the app; on a phone
-         that keeps her place, and on the desktop where she will actually print
-         it, it is the tab she prints from. */
+      /* The way out. Two doors, and the DOWNLOAD is the primary one: what
+         Amelia is doing with these is assembling something elsewhere, so what
+         she needs is files — every badge as its own image, plus a spreadsheet
+         of the words and the park-poster credits. The page beside it is for
+         looking, and for printing if that is what somebody wants; it costs a
+         text link, not a second button.
+
+         canAward() gates both: that flag is false only for a hidden guest,
+         which is the same line the server draws on the routes.
+
+         window.open, NOT location.href. On the happy path they are identical —
+         the response is an attachment, so nothing navigates. But when the
+         session has expired the server answers with the expired PAGE, and
+         location.href turns that into a navigation: the running app is replaced
+         by a dead-end notice with no way back. A throwaway tab takes that hit
+         instead, exactly as the look-at-them link does. */
       (canAward() ?
-      '<button class="ghostbtn" onclick="window.open(\'/badge-book\',\'_blank\')">' +
-        'Make a badge book &mdash; every badge, one page each</button>' : '') +
+      '<button class="ghostbtn" onclick="window.open(\'/badges.zip\',\'_blank\')">' +
+        'Download the badges &mdash; every picture, plus the words</button>' +
+      '<p class="tiny" style="margin:-2px 0 4px">' +
+        '<a href="/badge-book" target="_blank" style="color:inherit">' +
+        'or just look at them, one page each</a></p>' : '') +
       '<h2>National parks</h2>' + wall(parks) +
       '<h2>States</h2>' +
       (states.length ? wall(states) : '<p class="empty">No states yet &mdash; that changes fast.</p>') +

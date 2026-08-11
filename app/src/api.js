@@ -988,7 +988,7 @@ async function visitedSetAll(env) {
   for (const d of Object.keys(v)) for (const id of v[d]) all.add(id);
   return all;
 }
-async function firstVisitDates(env) {
+export async function firstVisitDates(env) {
   const v = await derivedVisits(env);
   const first = {};
   for (const d of Object.keys(v).sort())
