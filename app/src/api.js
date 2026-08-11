@@ -397,7 +397,16 @@ export async function today(env) {
   const [day, total, mpg, next, lastStop] = await Promise.all([
     env.roadtrip.prepare(`SELECT * FROM v_day_summary WHERE date = ?`).bind(date).first(),
     env.roadtrip.prepare(`SELECT * FROM v_trip_mileage`).first(),
-    env.roadtrip.prepare(`SELECT * FROM v_mpg_last_tank`).first(),
+    /* See derivedMpg: the gauge finds the fills, the receipts say how much. The
+       view this replaced was reading 87.7 mpg; it is left in place and nothing
+       reads it now.
+
+       CAUGHT, not propagated. This is the only query on the Today screen that
+       scans rather than seeks — sixty thousand rows against about a hundred for
+       everything else — and a card that cannot compute itself must not take the
+       whole screen down with it. Falls back to no card, which the client already
+       renders. */
+    derivedMpg(env).catch(() => null),
     // v_tonight sorts on a real date, not the mixed '2pm' / '2026-08-04'
     // strings the vault gave us. Prefer a stay covering today; otherwise the
     // next one starting.
@@ -526,7 +535,11 @@ export async function today(env) {
     alerts: weatherAlerts,
     miles_today: milesToday,
     miles_total: Math.round(((total?.miles ?? 0) + liveMiles) * 10) / 10,
-    mpg: mpg ? { value: mpg.mpg, method: mpg.method, miles: mpg.miles, gallons: mpg.gallons } : null,
+    /* Already the right shape — derivedMpg returns the object rather than a
+       row to be re-mapped, and carries its own provenance (how many fills, the
+       calibration it fitted and off how many recorded stops) so the number can
+       be argued with without opening the database. */
+    mpg,
     tonight: actual
       ? { id: actual.id, name: actual.place || (actual.kind === "campsite" ? "Camped" : "Stayed"),
           note: actual.note, cost: actual.cost, kind: actual.kind,
@@ -862,6 +875,202 @@ export async function map(env, person) {
    in the schema as fossils; nothing reads them for truth anymore. Because
    this is derived at read time over ALL trips, the first two days backfilled
    themselves the moment it shipped. */
+
+/* ------------------------------------------------------------ derived mpg */
+/**
+ * Miles per gallon. **The gauge finds the fills; the receipts say how much.**
+ *
+ * Andy's idea, 2026-08-11: nobody reliably taps the gas button, but the fuel
+ * percentage trends down and then jumps to full, and that jump is a fill. The
+ * first cut of this went further and tried to read the SIZE of the jump as a
+ * volume, calibrating gallons-per-percent against the stops Lily did record.
+ * It produced 22.1 mpg and it was about 8% too high, for a reason worth
+ * keeping: the gauge is badly non-linear, and the receipts that prove it were
+ * the very ones that version excluded from its fit. Filling from 74% took
+ * 6.000 gallons where a straight-line model said 3.92. `trip_meta` has said so
+ * all along — *"tank-to-tank from stop.gallons is preferred and needs no
+ * capacity at all."*
+ *
+ * So the gauge is not a fuel meter here. It is an EVENT DETECTOR, and that is
+ * the whole contribution: it knows about thirteen fills where the stop table
+ * knows about six. Volume comes from the pump receipts, which are exact —
+ * every one of the eight reconciles `cost / price_per_gallon` to three
+ * decimals.
+ *
+ * That division is what fixes the card. `v_mpg_last_tank` measured miles
+ * between RECORDED stops, so a leg spanning fills nobody wrote down got all
+ * their miles and one fill's gallons: 811 miles over 9.254 gallons, **87.7
+ * mpg**, live on six phones. Bounding the same receipt with the fills either
+ * side of it gives it its true 210 miles, and 22.7.
+ *
+ * A leg counts only when it is fully known: bounded by two detected fills, the
+ * later one carrying exactly one receipt, and every trip in between reporting
+ * its distance. Anything else is left out rather than estimated — which is why
+ * this covers about two thirds of the trip's miles and is worth more than a
+ * number covering all of them.
+ */
+const FILL_JUMP_PCT  = 5;                       // a jump this big is a fill, not gauge noise
+const RECEIPT_WINDOW = 6 * 60 * 60 * 1000;      // a stop is tapped well after the pump
+const RECEIPT_EARLY  = 30 * 60 * 1000;          // ...and just occasionally a minute before it
+const MPG_FLOOR = 5, MPG_CEIL = 60;             // outside this, something was mistyped
+
+let FUEL_CACHE = null;
+
+/**
+ * Returns { value, miles, gallons, legs, fills, receipts_used } or null when
+ * nothing is yet fully known.
+ */
+export async function derivedMpg(env) {
+  /* Keyed on the things that can actually change the answer, and on nothing
+     that cannot. Trip count and distance move when a leg's mileage lands or a
+     new trip closes; gallons SUM (not COUNT) moves when a receipt is edited,
+     which a count would miss — there is a live entry annotated "close estimate
+     not exact numbers" that somebody may yet correct. Deliberately NOT keyed on
+     the newest fuel sample: those arrive every thirty seconds with the ignition
+     on, which forced a full re-scan on almost every poll of a screen six phones
+     refresh every ninety. Fills happen with the engine off, so a new trip is
+     the signal that one may have occurred. */
+  const k = await env.roadtrip.prepare(
+    `SELECT (SELECT COUNT(*) FROM trips) AS tn,
+            (SELECT ROUND(COALESCE(SUM(distance),0),2) FROM trips) AS td,
+            (SELECT COUNT(*) FROM stop WHERE kind='gas' AND gallons IS NOT NULL) AS sn,
+            (SELECT ROUND(COALESCE(SUM(gallons),0),3) FROM stop WHERE kind='gas') AS sg`).first();
+  const key = `${k?.tn}:${k?.td}:${k?.sn}:${k?.sg}`;
+  if (FUEL_CACHE && FUEL_CACHE.key === key) return FUEL_CACHE.value;
+
+  const [jumps, trips, stops, meta] = await Promise.all([
+    /* The scan is pushed into D1 rather than pulled into the Worker: sixty-odd
+       thousand rows read to return fourteen, which is the right side of that
+       trade when the alternative is shipping every fuel sample over the wire.
+       A reading of exactly 0 is a sensor dropout — the trace has two, and both
+       would otherwise register as enormous fills. `prev_ts` comes back so that
+       one pump visit split across two samples can be rejoined by ADJACENCY
+       rather than by a time window: the two are guaranteed to be consecutive
+       readings, whereas a window wide enough to catch them (seven of thirteen
+       pump stops leave a sample gap over fifteen minutes) is also wide enough
+       to swallow two genuinely separate fills two hours apart. */
+    env.roadtrip.prepare(
+      `WITH f AS (
+         SELECT ts, fuel_level,
+                LAG(fuel_level) OVER (ORDER BY ts) AS prev,
+                LAG(ts)         OVER (ORDER BY ts) AS prev_ts
+           FROM track_points WHERE fuel_level IS NOT NULL AND fuel_level > 0)
+       SELECT ts, prev_ts, prev AS before_pct, fuel_level AS after_pct
+         FROM f WHERE prev IS NOT NULL AND fuel_level - prev >= ${FILL_JUMP_PCT}
+        ORDER BY ts`).all(),
+    env.roadtrip.prepare(
+      `SELECT start_time, end_time, distance FROM trips
+        WHERE start_time IS NOT NULL ORDER BY start_time`).all(),
+    env.roadtrip.prepare(
+      `SELECT occurred_at, gallons FROM stop
+        WHERE kind='gas' AND gallons IS NOT NULL AND gallons > 0
+        ORDER BY occurred_at`).all(),
+    env.roadtrip.prepare(`SELECT tank_gallons FROM trip_meta WHERE id = 1`).first(),
+  ]);
+
+  /* One pump visit, two samples — 67% to 81% to 100% within thirty seconds on
+     08-06. Rejoin only when the second jump reads FROM the first jump's own
+     reading, which is exact and cannot merge two real fills. */
+  const fills = [];
+  for (const j of (jumps.results || [])) {
+    const last = fills[fills.length - 1];
+    if (last && j.prev_ts === last.ts && Math.abs(j.before_pct - last.after) < 0.01) {
+      last.after = j.after_pct; last.ts = j.ts; last.at = new Date(j.ts).getTime();
+    } else {
+      fills.push({ ts: j.ts, at: new Date(j.ts).getTime(),
+                   before: j.before_pct, after: j.after_pct, receipts: [] });
+    }
+  }
+  if (fills.length < 2) return cacheFuel(key, null);
+
+  /* Cumulative miles from Bouncie's OWN trip distances. The breadcrumb path
+     cuts a corner every fifteen seconds and comes out 13% short, which would
+     flow straight into every figure below. `known` reports whether every trip
+     touching that instant carried a distance — a trip whose tripEnd webhook has
+     not arrived has none, and counting it as zero would silently shorten a leg
+     rather than disqualify it. */
+  const tl = (trips.results || []).map((t) => ({
+    a: new Date(t.start_time).getTime(),
+    b: t.end_time ? new Date(t.end_time).getTime() : null,
+    d: t.distance,
+  }));
+  const milesAt = (when) => {
+    let m = 0, known = true;
+    for (const t of tl) {
+      if (t.a >= when) break;
+      const ended = t.b !== null && t.b <= when;
+      if (t.d == null) { if (ended || t.a < when) known = false; continue; }
+      if (ended) { m += t.d; continue; }
+      /* Mid-trip: prorate by elapsed time. An OPEN trip has no end to prorate
+         against, so its distance is not yet attributable at all — the previous
+         version divided by (when - start) and so always added 100% of it. */
+      if (t.b === null) { known = false; continue; }
+      const span = t.b - t.a;
+      m += span > 0 ? t.d * Math.min(1, Math.max(0, (when - t.a) / span)) : 0;
+    }
+    return { m, known };
+  };
+  for (const f of fills) Object.assign(f, milesAt(f.at));
+
+  /* Attach receipts to fills. The timestamps are the weak part — a stop carries
+     the moment it was TAPPED, and today's two are 2.6 hours adrift of the pump
+     — so match to the nearest fill in a window that is generous forward and
+     mean backward, since you pump before you type. */
+  const tank = meta?.tank_gallons || null;
+  let rejected = 0;
+  for (const st of (stops.results || [])) {
+    /* A receipt larger than the tank is a decimal slip, not a fill. 62.71 for
+       6.271 passes every other check and would put 11.9 mpg on six phones. */
+    if (tank && st.gallons > tank * 1.1) { rejected++; continue; }
+    const t = new Date(st.occurred_at).getTime();
+    let best = null, bestDt = Infinity;
+    for (const f of fills) {
+      const dt = t - f.at;
+      if (dt < -RECEIPT_EARLY || dt > RECEIPT_WINDOW) continue;
+      if (Math.abs(dt) < bestDt) { bestDt = Math.abs(dt); best = f; }
+    }
+    if (best) best.receipts.push(st.gallons); else rejected++;
+  }
+
+  /* A leg is measurable only when everything about it is known: bounded by two
+     detected fills, ending on a fill with EXACTLY ONE receipt, and with every
+     trip between them reporting its distance.
+
+     Exactly one matters. On 08-11 two stops were tapped 23 seconds apart and
+     both land on the same fill; one of them is a catch-up entry for a fill
+     nobody recorded. Keeping whichever sorted first swung the whole figure by
+     10% on data-entry order, so both are dropped and the leg simply does not
+     count. */
+  let miles = 0, gallons = 0, legs = 0, used = 0, dropped = 0;
+  for (let i = 1; i < fills.length; i++) {
+    const a = fills[i - 1], b = fills[i];
+    if (b.receipts.length !== 1) { if (b.receipts.length > 1) dropped += b.receipts.length; continue; }
+    if (!a.known || !b.known) { dropped++; continue; }
+    const legMiles = b.m - a.m;
+    const legGal = b.receipts[0];
+    if (legMiles <= 0 || legGal <= 0) { dropped++; continue; }
+    const legMpg = legMiles / legGal;
+    /* A leg outside this band is not a driving result, it is a typo or a fill
+       this code failed to see. Excluded and counted, never averaged in. */
+    if (legMpg < MPG_FLOOR || legMpg > MPG_CEIL) { dropped++; continue; }
+    miles += legMiles; gallons += legGal; legs++; used++;
+  }
+  if (!legs || gallons <= 0) return cacheFuel(key, null);
+
+  return cacheFuel(key, {
+    value: Math.round((miles / gallons) * 10) / 10,
+    miles: Math.round(miles * 10) / 10,
+    gallons: Math.round(gallons * 1000) / 1000,
+    legs,
+    fills: fills.length,
+    receipts_used: used,
+    receipts_unused: (stops.results || []).length - used,
+    rejected,
+    dropped,
+  });
+}
+
+function cacheFuel(key, value) { FUEL_CACHE = { key, value }; return value; }
 
 let VSTOP_CACHE = null;
 

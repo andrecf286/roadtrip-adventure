@@ -1014,9 +1014,6 @@ function loadToday(){
   get("/api/today").then(function(d){
     if (!d) { offlineInto("s-today", "loadToday()"); return; }
     POS = d.position;
-    var mpg = d.mpg ? '<div class="stat"><span>'+d.mpg.value+'</span><small>mpg</small>'+
-        '<span class="qual">'+esc(d.mpg.method)+'</span></div>'
-      : '<div class="stat"><span>&mdash;</span><small>mpg</small><span class="qual">needs two fills</span></div>';
     /* The .live pill these two lines built was never inserted into any screen —
        Today renders the state inline in l1b from ls2, and no other caller
        existed. Removed 2026-08-11: it cost a second liveState() call on every
@@ -1099,8 +1096,14 @@ function loadToday(){
         (fuelAge > 90*60000
           ? '<span style="opacity:.6"> at '+fmtTime(d.fuel.at)+'</span>' : '');
     }
+    /* mpg is a TRIP average now, derived from the gauge rather than from a gas
+       button nobody presses, which is why it sits beside the trip's total
+       mileage and not beside today's. It reads 22-ish; it read 87.7 the
+       afternoon two stops were tapped a minute apart. Per-tank figures on this
+       trip ran 16 to 32 because the gauge hangs full for a while after a fill,
+       so the pooled number is the only one worth showing. */
     var l2 = (d.miles_total||0).toLocaleString()+' mi total &middot; ' +
-      (d.mpg ? d.mpg.value+' mpg' : 'mpg after two fills') + fuelBit;
+      (d.mpg ? d.mpg.value+' mpg' : 'mpg once they have filled up twice') + fuelBit;
     var kinds = ["gas","food","campsite","lodging","event","journal"];
     var KLABEL = { gas:"Gas", food:"Food", campsite:"Campsite", lodging:"Lodging",
                    event:"Event", journal:"Journal" };
