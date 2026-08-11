@@ -1193,6 +1193,44 @@ function loadToday(){
        so — but the car sat still for eight hours somewhere, and that is the
        record. Sits under the dial, before tonight's plan, so the screen reads
        in order: where they woke, where they are, where they are going. */
+    /* Where they are, in the same card shape as Last night — Andy's ask, and
+       the shape IS the spec: label on the left, age on the right, Apple and
+       Google underneath.
+
+       It reads the fix, not the position. The fix is the app's answer to "where
+       are they", carrying its own source and age; position is the raw Bouncie
+       breadcrumb kept unchanged for phones still on an older shell.
+
+       NO place name is passed to mapsLinks, deliberately, and this is the one
+       place it differs from Last night. That function builds ll=coords plus
+       q=name, and Apple treats q as a SEARCH — hand it "Three Forks, MT" and it
+       drops a pin on the town, which for a campground is what you want and for
+       a car on a highway forty miles out is a different place entirely. With no
+       name it falls through to q=<coords> and pins the exact spot.
+
+       The label is "Where they are" rather than "Right now" because the fix can
+       be twelve hours old — it was this morning — and a card headed "Right now"
+       beside a tag reading "12h ago" argues with itself. The tag carries the
+       truth; the heading stays true at any age. */
+    var whereNow = "";
+    if (d.fix && d.fix.lat != null && d.fix.lon != null) {
+      var fx = d.fix;
+      /* The name is a nicety and the button is the point, so when there is no
+         name the card drops it rather than inventing one. nearestTown returns
+         null past forty miles from the corridor list, which is exactly where
+         they were the first time this rendered — inside Glacier — and
+         "Where they are - the car" read worse than no label at all. */
+      var whoWhere = (fx.source && fx.source !== "bouncie")
+        ? esc(fx.subject || fx.source)
+        : (d.town ? esc(d.town) : "");
+      whereNow = '<div class="card" style="margin-top:10px"><div class="row">' +
+        '<span><span style="opacity:.6">Where they are</span>' +
+          (whoWhere ? '<span style="opacity:.6"> &middot; </span><b>'+whoWhere+'</b>' : '') +
+        '</span>' +
+        (fx.age_min != null ? '<span class="tiny">'+fmtAgo(fx.age_min)+'</span>' : '') + '</div>' +
+        mapsLinks(fx.lat, fx.lon, null, false) + '</div>';
+    }
+
     var lastNight = "";
     if (d.last_night && d.last_night.place) {
       var ln = d.last_night;
@@ -1207,7 +1245,7 @@ function loadToday(){
       '<h1 style="font-size:19px;line-height:1.35">'+l1+'</h1>' +
       '<p class="sub" style="margin-bottom:2px">'+l1b+'</p>' +
       '<p class="sub">'+l2+'</p>' +
-      undo + grid + lastNight + tonight + last;
+      undo + grid + whereNow + lastNight + tonight + last;
     if (el("dial")) {
       paintHero();
       /* Cycles for all six. On a viewer's dial the prompt and the lit ring are
