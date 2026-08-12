@@ -153,11 +153,13 @@ export const SHELL = String.raw`<!DOCTYPE html>
   /* The seam. A labelled line across the timeline where the past stops and the
      plan starts, so "now" is a place on the page rather than something you have
      to work out from the dates. */
-  .maplinks{display:flex;align-items:center;gap:10px;margin:10px 0 2px}
-  .maplinks .ghostbtn{margin:0;flex:1}
-  .maplinks .gmap{flex:none;font-size:12.5px;color:var(--ink-3);text-decoration:none;
-    padding:8px 4px}
-  .maplinks .gmap:active{color:var(--sun)}
+  /* Two equal buttons, not a button and a footnote. The old pair was a
+     full-width "Open in Maps" beside a small grey "Google", which reads as a
+     primary and a fallback — a claim the app has no business making, and by
+     August exactly backwards: the family moved to Google Maps for its wildfire
+     overlay. Same size, same weight, named for the app each one opens. */
+  .maplinks{display:flex;align-items:center;gap:9px;margin:10px 0 2px}
+  .maplinks .ghostbtn{margin:0;flex:1;min-width:0;padding:14px 6px;font-size:15px}
   .seam{display:flex;align-items:center;gap:10px;margin:16px 0 10px;
     color:var(--sun);font-size:12px;font-weight:700;letter-spacing:.4px;
     text-transform:uppercase}
@@ -246,6 +248,11 @@ export const SHELL = String.raw`<!DOCTYPE html>
   .kind .ic{font-size:26px;line-height:1}
   .kind .lb{font-size:14.5px;font-weight:600}
   .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  /* The right-hand tag in a card row is always short — "10 min ago", "9h 36m",
+     "12h ago" — and is the thing that should hold its shape while the place
+     name beside it wraps. Without this, "Columbia Falls, MT" pushed "10 min
+     ago" onto two lines and broke it mid-phrase. */
+  .row > .tiny{white-space:nowrap;flex:none}
   .muted{color:var(--ink-2);font-size:13.5px}
   .tiny{color:var(--ink-3);font-size:12px}
   .conf{font-variant-numeric:tabular-nums;font-weight:640}
@@ -472,10 +479,13 @@ function mapsLinks(lat, lon, name, drive){
   var google = drive
     ? "https://www.google.com/maps/dir/?api=1&destination=" + ll
     : "https://www.google.com/maps/search/?api=1&query=" + ll;
+  /* Labelled by the app they open, in both the look-at-it and the drive-there
+     variant. The drive variant used to say "Directions", which named the
+     action but not the destination app — and the two URLs already differ, so
+     the word was doing less work than the app name does. */
   return '<div class="maplinks">' +
-    '<a class="ghostbtn" href="'+apple+'" target="_blank" rel="noopener">' +
-      (drive ? "Directions" : "Open in Maps") + '</a>' +
-    '<a class="gmap" href="'+google+'" target="_blank" rel="noopener">Google</a></div>';
+    '<a class="ghostbtn" href="'+apple+'" target="_blank" rel="noopener">Apple Maps</a>' +
+    '<a class="ghostbtn" href="'+google+'" target="_blank" rel="noopener">Google Maps</a></div>';
 }
 
 /* "8h", "8h 20m", "45 min". Nobody wants 485 minutes. */
