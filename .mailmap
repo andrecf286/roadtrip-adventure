@@ -1,0 +1,17 @@
+# Who wrote this repo, canonically — for display only.
+#
+# Four names accumulated across 82 commits and all of them are one person and
+# one collaboration: "Andy Foti" is Andre, and "Novalyst Session" was Claude
+# committing under a session label. This file maps them onto two contributors
+# without rewriting a single commit, which matters because specific hashes are
+# recorded in the arc (Apsis, the workstream carry-forward) and a rewrite would
+# invalidate every one of them.
+#
+# Format is: Canonical Name <canonical@email> Commit Name <commit@email>
+#
+# Going forward there is only one author — Andre Foti — with the model named in
+# a Co-Authored-By trailer, so nothing new should ever need adding here. See
+# .githooks/commit-msg.
+
+Andre Foti <acfoti@gmail.com> Andy Foti <acfoti@gmail.com>
+Claude <noreply@anthropic.com> Novalyst Session <acfoti@gmail.com>

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Attribution, applied by the machine rather than remembered by the author.
+#
+# Every commit here is written by Claude and directed by Andre. The author
+# field carries ONE identity (Andre Foti) because git's author field IS one
+# identity — name and email together — and stuffing two names into it creates
+# a contributor who does not exist and re-splits the moment the model version
+# changes. The model belongs in a trailer, where the NAME can carry a version
+# while the EMAIL stays constant, so git and GitHub group every Claude commit
+# together no matter which version wrote it.
+#
+# Degrades safely: with CLAUDE_MODEL unset the trailer still lands, just
+# without the version. An attribution that is present and vague beats one that
+# is absent because an env var was missing.
+#
+# Idempotent — a message that already names a co-author is left alone, so
+# amending or rebasing cannot stack duplicates.
+set -euo pipefail
+MSG_FILE="$1"
+
+grep -qi '^Co-Authored-By:' "$MSG_FILE" && exit 0
+
+# Skip the commented-out template git hands you for an aborted commit.
+grep -qv '^\s*#' "$MSG_FILE" || exit 0
+
+NAME="Claude${CLAUDE_MODEL:+ }${CLAUDE_MODEL:-}"
+printf '\n%s\n' "Co-Authored-By: ${NAME} <noreply@anthropic.com>" >> "$MSG_FILE"
