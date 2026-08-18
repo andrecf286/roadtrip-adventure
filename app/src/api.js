@@ -125,7 +125,8 @@ async function liveExtraMiles(env) {
       WHERE t.start_time >= m.trip_start_at AND t.distance IS NULL`).all();
   for (const t of open.results) {
     const pts = await env.roadtrip.prepare(
-      `SELECT lon, lat FROM track_points WHERE transaction_id = ? ORDER BY ts`).bind(t.transaction_id).all();
+      `SELECT lon, lat FROM track_points WHERE transaction_id = ? AND ${REAL_FIX}
+        ORDER BY ts`).bind(t.transaction_id).all();
     mi += pathMilesOf(pts.results.map((r) => [r.lon, r.lat]));
   }
   return mi;
@@ -149,6 +150,15 @@ async function liveExtraMiles(env) {
  * It also skips the ORDER BY ABS(...) scan over every breadcrumb, which is the
  * expensive half of this function.
  */
+/* A breadcrumb at exactly 0,0 is the tracker saying "no fix", not a position
+   (see the ingest worker's Null Island note). The ingest door is shut now, but
+   every query that asks for the NEWEST point is one bad row away from moving
+   the whole family to the Atlantic, and the bad row is always the newest one —
+   a tracker loses its lock when the car goes indoors, which is when it stops.
+   So the readers filter too. Cheap, and it means a future sentinel of the same
+   shape costs nothing instead of costing a screenshot from Andy. */
+const REAL_FIX = "lat IS NOT NULL AND lon IS NOT NULL AND NOT (lat = 0 AND lon = 0)";
+
 async function positionAt(env, iso, toleranceMin, parkedOnly) {
   const t = new Date(iso).getTime();
   if (!t) return null;
@@ -157,7 +167,7 @@ async function positionAt(env, iso, toleranceMin, parkedOnly) {
   // expected a function.
   if (!parkedOnly) {
     const nearest = await env.roadtrip.prepare(
-      `SELECT lat, lon, ts FROM track_points
+      `SELECT lat, lon, ts FROM track_points WHERE ${REAL_FIX}
         ORDER BY ABS(strftime('%s', ts) - strftime('%s', ?)) LIMIT 1`).bind(iso).first();
     if (nearest && Math.abs(new Date(nearest.ts).getTime() - t) / 60000 <= toleranceMin)
       return { lat: nearest.lat, lon: nearest.lon };
@@ -178,7 +188,7 @@ async function positionAt(env, iso, toleranceMin, parkedOnly) {
       ORDER BY start_time LIMIT 1`).bind(prev.end_time).first();
   if (nextStart && new Date(nextStart.start_time).getTime() < t) return null; // driving, just no crumbs
   const parked = await env.roadtrip.prepare(
-    `SELECT lat, lon FROM track_points WHERE transaction_id = ?
+    `SELECT lat, lon FROM track_points WHERE transaction_id = ? AND ${REAL_FIX}
       ORDER BY ts DESC LIMIT 1`).bind(prev.transaction_id).first();
   return parked ? { lat: parked.lat, lon: parked.lon } : null;
 }
@@ -315,7 +325,8 @@ export async function today(env) {
   const meta = await tripMeta(env);
 
   const last = await env.roadtrip
-    .prepare(`SELECT ts, lat, lon, speed, fuel_level FROM track_points ORDER BY ts DESC LIMIT 1`)
+    .prepare(`SELECT ts, lat, lon, speed, fuel_level FROM track_points
+               WHERE ${REAL_FIX} ORDER BY ts DESC LIMIT 1`)
     .first();
 
   /* ---- where are they, and how sure are we -----------------------------
@@ -780,11 +791,13 @@ export async function map(env, person) {
          FROM track_points tp
          JOIN trips t ON t.transaction_id = tp.transaction_id, trip_meta m
         WHERE t.start_time >= m.trip_start_at AND (tp.rowid % 4) = 0
+          AND NOT (tp.lat = 0 AND tp.lon = 0)
         ORDER BY tp.transaction_id, tp.ts`).all(),
     env.roadtrip.prepare(
       `SELECT id, kind, place, lat, lon, occurred_at, date, weather_code, temp_f FROM stop
         WHERE lat IS NOT NULL AND lon IS NOT NULL ORDER BY occurred_at`).all(),
-    env.roadtrip.prepare(`SELECT lat, lon, ts FROM track_points ORDER BY ts DESC LIMIT 1`).first(),
+    env.roadtrip.prepare(`SELECT lat, lon, ts FROM track_points
+                           WHERE ${REAL_FIX} ORDER BY ts DESC LIMIT 1`).first(),
     env.roadtrip.prepare(`SELECT * FROM v_trip_mileage`).first(),
     // Itinerary places, geocoded 2026-08-03: labeled pins for the basemap.
     env.roadtrip.prepare(
@@ -1127,6 +1140,7 @@ async function vehicleStops(env) {
          JOIN track_points tp ON tp.rowid = (
               SELECT tp2.rowid FROM track_points tp2
                WHERE tp2.transaction_id = t.transaction_id
+                 AND NOT (tp2.lat = 0 AND tp2.lon = 0)
                ORDER BY tp2.ts DESC LIMIT 1)
         WHERE t.start_time >= m.trip_start_at`).all(),
   ]);
@@ -1134,6 +1148,31 @@ async function vehicleStops(env) {
 
   const lastCrumb = {};
   for (const p of lastPts.results) lastCrumb[p.transaction_id] = p;
+
+  /* A trip can finish with no usable position OF ITS OWN. Trip 3183 on
+     2026-08-18 lasted 78 seconds inside what was almost certainly a parking
+     garage: every crumb it produced was a no-fix sentinel, so once those were
+     filtered out it had none left, and its polyline is a LineString with an
+     empty coordinate array. Six older trips also have no crumbs (imported by
+     REST before the webhook existed) but carry full polylines, so they resolve
+     on the fallback below and are not the case this handles.
+
+     Dropping such a stop is the wrong answer. The car is somewhere — it is
+     exactly where it was last actually seen — and dropping it silently walks
+     "last night" back to whatever the PREVIOUS stop was, which on 08-18 would
+     have moved the girls from their hotel in Vancouver to the border crossing
+     two hours behind them. Resolve from the newest real crumb at or before the
+     trip ended. `idx_tp_ts` makes each one an index seek, and it runs only for
+     trips that reach this state, which is one in ninety-nine. */
+  const orphans = rows.filter((t) =>
+    t.end_time && !lastCrumb[t.transaction_id] && !thinnedTrack(t.gps, 4000).length);
+  if (orphans.length) {
+    const found = await Promise.all(orphans.map((t) => env.roadtrip.prepare(
+      `SELECT lat, lon FROM track_points
+        WHERE ${REAL_FIX} AND strftime('%s', ts) <= strftime('%s', ?)
+        ORDER BY ts DESC LIMIT 1`).bind(t.end_time).first().catch(() => null)));
+    orphans.forEach((t, i) => { if (found[i]) lastCrumb[t.transaction_id] = found[i]; });
+  }
 
   const stops = [];
   for (let i = 0; i < rows.length; i++) {
@@ -1637,7 +1676,8 @@ async function statesWall(env) {
     // we only read trips. The live breadcrumbs close that gap; every 15th
     // point is a fix every few miles, plenty to notice a border.
     env.roadtrip.prepare(
-      `SELECT lat, lon, ts FROM track_points WHERE (rowid % 15) = 0 ORDER BY ts`).all(),
+      `SELECT lat, lon, ts FROM track_points WHERE (rowid % 15) = 0 AND ${REAL_FIX}
+        ORDER BY ts`).all(),
   ]);
 
   const seen = {}; // state -> first local date
@@ -2038,7 +2078,8 @@ export async function createStop(env, person, body, ctx) {
   let lat = body.lat ?? null, lon = body.lon ?? null;
   if (lat == null) {
     const p = await env.roadtrip
-      .prepare(`SELECT lat, lon, ts FROM track_points ORDER BY ts DESC LIMIT 1`).first();
+      .prepare(`SELECT lat, lon, ts FROM track_points
+                 WHERE ${REAL_FIX} ORDER BY ts DESC LIMIT 1`).first();
     if (p && Date.now() - new Date(p.ts).getTime() < 30 * 60000) { lat = p.lat; lon = p.lon; }
   }
 
@@ -2304,7 +2345,7 @@ export async function track(env, q) {
   // polyline also exists is harmless; a hole is not.
   const crumbs = await env.roadtrip.prepare(
     `SELECT transaction_id, lat, lon FROM track_points
-      WHERE lon >= ? AND lon <= ? AND lat >= ? AND lat <= ?
+      WHERE lon >= ? AND lon <= ? AND lat >= ? AND lat <= ? AND ${REAL_FIX}
       ORDER BY transaction_id, ts`).bind(w, e, s2, n).all();
   const crumbTrips = {};
   for (const p of crumbs.results)

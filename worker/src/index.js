@@ -165,6 +165,20 @@ async function processEvent(env, evt, rawId) {
         const g = p?.gps;
         if (!g || typeof g.lat !== 'number' || typeof g.lon !== 'number') continue;
         if (!p.timestamp) continue;
+        /* Null Island. When the tracker has no satellite lock Bouncie still
+           sends a point — {lat: 0, lon: 0, speed: 0} — and because 0 IS a
+           number it sails straight through the typeof check above. Two arrived
+           on 2026-08-18 from what was almost certainly an underground garage
+           in downtown Vancouver.
+           These are not positions, they are the ABSENCE of one, and they land
+           at the end of a trip, which is precisely the row every "where are
+           they right now" query selects: the live marker, the derived night,
+           and the Maps handoff all moved to the Gulf of Guinea on the strength
+           of two rows out of 66,666.
+           0,0 is a real place and someone's app will legitimately need it one
+           day. This one is driving around North America. */
+        if (g.lat === 0 && g.lon === 0) continue;
+        if (Math.abs(g.lat) > 90 || Math.abs(g.lon) > 180) continue;
         batch.push(
           stmt.bind(
             evt.transactionId ?? null,
